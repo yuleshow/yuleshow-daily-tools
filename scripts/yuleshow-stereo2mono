@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# yuleshow-stereo2mono: convert stereo mp3 files in CWD to mono.
+# Usage: yuleshow-stereo2mono
+# Output: <name>-mono.mp3 alongside originals.
+
+set -euo pipefail
+
+log()  { printf '🚀 %s\n' "$*"; }
+ok()   { printf '✅ %s\n' "$*"; }
+err()  { printf '❌ %s\n' "$*" >&2; }
+
+command -v ffmpeg >/dev/null 2>&1 || { err "ffmpeg not found"; exit 1; }
+
+log "Converting mp3 to mono in: $PWD"
+
+shopt -s nullglob nocaseglob
+for i in *.mp3; do
+    out="${i%.*}-mono.mp3"
+    ffmpeg -hide_banner -loglevel error -i "$i" -ac 1 "$out"
+    ok "$i -> $out"
+done
+for i in *."mp3";
+  do ffmpeg -i "$i" -ac 1 "${i%.*}-mono.mp3";
+done

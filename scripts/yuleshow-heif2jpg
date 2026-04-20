@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""yuleshow-heif2jpg: convert HEIC/HEIF images in a directory to JPG.
+
+Usage: yuleshow-heif2jpg [dir]
+"""
+
+import sys
+from pathlib import Path
+
+from PIL import Image
+import pillow_heif
+
+pillow_heif.register_heif_opener()
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
+def err(msg):  print(f"❌ {msg}", file=sys.stderr)
+
+
+def convert(target_dir: Path) -> int:
+    if not target_dir.is_dir():
+        err(f"Not a directory: {target_dir}")
+        return 1
+
+    log(f"Converting HEIC/HEIF in: {target_dir}")
+    n_ok = n_fail = 0
+    for path in sorted(target_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in (".heic", ".heif"):
+            continue
+        out = path.with_suffix(".jpg")
+        try:
+            with Image.open(path) as img:
+                img.convert("RGB").save(out, "JPEG", quality=95)
+            ok(f"{path.name} -> {out.name}")
+            n_ok += 1
+        except Exception as e:
+            warn(f"Failed {path.name}: {e}")
+            n_fail += 1
+
+    log(f"Done. ok={n_ok} failed={n_fail}")
+    return 0
+
+
+if __name__ == "__main__":
+    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    sys.exit(convert(target))

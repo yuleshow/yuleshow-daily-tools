@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# yuleshow-clean: macOS system maintenance (caches, Adobe, .DS_Store, AppleDouble).
+# Usage: yuleshow-clean
+# Note: macOS-only (uses defaults, dot_clean, purge).
+
+set -uo pipefail
+
+log()  { printf '🚀 %s\n' "$*"; }
+ok()   { printf '✅ %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*" >&2; }
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    warn "yuleshow-clean is macOS-only. Current OS: $(uname -s). Exiting."
+    exit 0
+fi
+
+log "Starting system maintenance for 梅璽閣主..."
+
+# 1. Pre-authorize sudo, keep it alive while script runs
+sudo -v
+while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+
+# 2. Block .DS_Store on USB / network volumes
+log "Enabling USB/Network dot-file protection..."
+defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
+defaults write com.apple.desktopservices DSDontWriteUSBStores     -bool true
+
+# 3. Homebrew cleanup (protects API cache)
+if command -v brew >/dev/null 2>&1; then
+    log "Cleaning up Homebrew..."
+    export HOMEBREW_NO_AUTO_UPDATE=1
+    brew cleanup -s
+else
+    warn "Homebrew not found, skipping."
+fi
+
+# 4. Purge inactive RAM
+log "Purging inactive RAM..."
+sudo purge
+
+# 5. Adobe Premiere cache
+log "Cleaning Adobe Premiere Pro cache..."
+ADOBE_COMMON="$HOME/Library/Application Support/Adobe/Common"
+if [ -d "$ADOBE_COMMON" ]; then
+    rm -rf "$ADOBE_COMMON/Media Cache/"*       2>/dev/null
+    rm -rf "$ADOBE_COMMON/Media Cache Files/"* 2>/dev/null
+    rm -rf "$ADOBE_COMMON/Peak Files/"*        2>/dev/null
+    rm -rf "$ADOBE_COMMON/PTX/"*               2>/dev/null
+fi
+
+# 6. Merge AppleDouble files in project dirs
+log "Merging AppleDouble files in project directories..."
+[ -d "$HOME/yuleshow-github/" ] && dot_clean -m "$HOME/yuleshow-github/"
+[ -d "$HOME/Pictures/" ]        && dot_clean -m "$HOME/Pictures/"
+
+# 7. Remove local .DS_Store
+log "Cleaning local .DS_Store files..."
+for d in Desktop Downloads Documents Pictures; do
+    [ -d "$HOME/$d" ] && find "$HOME/$d" -name ".DS_Store" -depth -exec rm {} \; 2>/dev/null
+done
+
+# 8. Clear user caches (protect Homebrew API cache)
+log "Clearing user caches (protecting Homebrew)..."
+find "$HOME/Library/Caches" -mindepth 1 -maxdepth 1 ! -name "Homebrew" -exec rm -rf {} \; 2>/dev/null
+
+ok "Maintenance complete! 梅璽閣主, your workspace is optimized."
+#!/bin/bash
+
+# --- 梅璽閣 系統維護工具 V9 ---
+# macOS-only: uses `defaults`, `dot_clean`, `purge`, `sips`, Adobe paths.
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "⚠️  yuleshow-clean is macOS-only. Current OS: $(uname -s). Exiting."
+    exit 0
+fi
+
+echo "🚀 Starting ultimate maintenance for 梅璽閣主..."
+
+# 0. 預先請求 Sudo 權限，避免中間彈密碼
+sudo -v
+# 保持 sudo 活躍直到腳本結束
+while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+
+# 1. USB/Network 保護
+echo "🛡 Ensuring USB/Network dot-file protection is ON..."
+defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
+defaults write com.apple.desktopservices DSDontWriteUSBStores -bool true
+
+# 2. Homebrew 清理 (現在會快很多)
+if command -v brew &> /dev/null; then
+    echo "📦 Cleaning up Homebrew..."
+    # 關閉自動更新 API，避免每次都下載
+    export HOMEBREW_NO_AUTO_UPDATE=1
+    brew cleanup -s
+else
+    echo "⚠️ Homebrew not found, skipping."
+fi
+
+# 3. 釋放內存
+echo "🧹 Purging inactive RAM..."
+sudo purge
+
+# 4. Adobe Premiere 緩存清理
+echo "🎬 Cleaning Adobe Premiere Pro Cache..."
+ADOBE_COMMON="$HOME/Library/Application Support/Adobe/Common"
+if [ -d "$ADOBE_COMMON" ]; then
+    rm -rf "$ADOBE_COMMON/Media Cache/"*
+    rm -rf "$ADOBE_COMMON/Media Cache Files/"*
+    rm -rf "$ADOBE_COMMON/Peak Files/"*
+    rm -rf "$ADOBE_COMMON/PTX/"*
+fi
+
+# 5. 合併 AppleDouble 文件
+echo "🔗 Merging AppleDouble files in project directories..."
+[ -d ~/yuleshow-github/ ] && dot_clean -m ~/yuleshow-github/
+[ -d ~/Pictures/ ] && dot_clean -m ~/Pictures/
+
+# 6. 清理本地垃圾文件
+echo "🔍 Cleaning up local .DS_Store files..."
+for dir in Desktop Downloads Documents Pictures; do
+    [ -d ~/$dir ] && find ~/$dir -name ".DS_Store" -depth -exec rm {} \; 2>/dev/null
+done
+
+# 7. 智能清理用戶緩存 (排除 Homebrew 緩存以避免重複下載)
+echo "📂 Clearing user caches (protecting Homebrew API)..."
+find ~/Library/Caches -mindepth 1 -maxdepth 1 ! -name "Homebrew" -exec rm -rf {} \; 2>/dev/null
+
+echo "✨ Maintenance complete! 梅璽閣主, your workspace is optimized."

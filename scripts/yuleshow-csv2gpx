@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""yuleshow-csv2gpx: convert GPS CSV (time,lat,lon,alt) to GPX 1.1.
+
+Usage: yuleshow-csv2gpx <input.csv>
+Timestamps in the CSV 'time' column must be Unix seconds.
+Output filename: YYYYMMDD_HHMMSS-HHMMSS.gpx (America/Los_Angeles).
+"""
+
+import csv
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def err(msg):  print(f"❌ {msg}", file=sys.stderr)
+
+
+def convert(input_csv: Path) -> int:
+    if not input_csv.is_file():
+        err(f"File not found: {input_csv}")
+        return 1
+
+    la_tz = ZoneInfo("America/Los_Angeles") if ZoneInfo else None
+
+    log(f"Reading {input_csv}")
+    with input_csv.open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        err("CSV has no data rows.")
+        return 1
+
+    points = []
+    for row in rows:
+        ts = int(row["time"])
+        dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+        dt_la = dt_utc.astimezone(la_tz) if la_tz else dt_utc
+        points.append({"lat": row["lat"], "lon": row["lon"], "alt": row["alt"], "time": dt_la})
+
+    start = points[0]["time"]
+    end = points[-1]["time"]
+    out_name = f"{start.strftime('%Y%m%d_%H%M%S')}-{end.strftime('%H%M%S')}.gpx"
+
+    gpx = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<gpx version="1.1" creator="yuleshow-csv2gpx" xmlns="http://www.topografix.com/GPX/1/1">',
+        "  <trk>",
+        f'    <name>Track_{start.strftime("%Y%m%d")}</name>',
+        "    <trkseg>",
+    ]
+    for p in points:
+        gpx.append(f'      <trkpt lat="{p["lat"]}" lon="{p["lon"]}">')
+        gpx.append(f'        <ele>{p["alt"]}</ele>')
+        gpx.append(f'        <time>{p["time"].isoformat()}</time>')
+        gpx.append("      </trkpt>")
+    gpx += ["    </trkseg>", "  </trk>", "</gpx>"]
+
+    Path(out_name).write_text("\n".join(gpx), encoding="utf-8")
+
+    ok(f"Wrote {out_name}")
+    print(f"   start : {start.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   end   : {end.strftime('%H:%M:%S')}")
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        err("Usage: yuleshow-csv2gpx <input.csv>")
+        sys.exit(1)
+    sys.exit(convert(Path(sys.argv[1])))

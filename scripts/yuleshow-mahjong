@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""yuleshow-mahjong: crop 2560x1080 ultrawide screenshots to center 1440x1080.
+
+Usage: yuleshow-mahjong
+Scans CWD (non-recursive). Outputs to ./output_images/.
+"""
+
+import os
+import sys
+
+from PIL import Image
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
+
+
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
+
+
+def main() -> int:
+    cwd = os.getcwd()
+    out_dir = os.path.join(cwd, "output_images")
+    os.makedirs(out_dir, exist_ok=True)
+
+    log(f"Cropping 2560x1080 -> 1440x1080 (center) in: {cwd}")
+
+    for name in os.listdir(cwd):
+        src = os.path.join(cwd, name)
+        if os.path.isdir(src) or not name.lower().endswith(IMAGE_EXTS):
+            continue
+        with Image.open(src) as img:
+            if img.size != (2560, 1080):
+                warn(f"Skip {name}: size {img.size} != (2560, 1080)")
+                continue
+            left = (2560 - 1440) // 2  # 560
+            cropped = img.crop((left, 0, left + 1440, 1080))
+            out_path = os.path.join(out_dir, name)
+            cropped.save(out_path)
+        ok(f"{name} -> output_images/{name}")
+
+    log("Batch cropping complete!")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

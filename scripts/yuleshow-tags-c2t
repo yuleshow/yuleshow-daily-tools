@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""yuleshow-tags-c2t: convert IPTC Keywords Simplified Chinese -> Traditional.
+
+Usage: yuleshow-tags-c2t
+Scans CWD recursively, rewrites IPTC keywords in-place.
+Logs: keywords_conversion_log.txt, keywords_conversion_error_log.txt
+"""
+
+import os
+import sys
+
+import pyexiv2
+from opencc import OpenCC
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
+
+
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif")
+CC = OpenCC("s2t")
+
+
+def process_image(image_path: str, log_f, err_f) -> None:
+    try:
+        with pyexiv2.Image(image_path) as img:
+            iptc = img.read_iptc()
+            if "Iptc.Application2.Keywords" not in iptc:
+                return
+            old = iptc["Iptc.Application2.Keywords"]
+            new = [CC.convert(k) for k in old]
+            img.modify_iptc({"Iptc.Application2.Keywords": new})
+
+        log_f.write(f"Updated {image_path}:\n  old: {old}\n  new: {new}\n\n")
+        print(f"🔍 {image_path}")
+        for o, n in zip(old, new):
+            print(f"   '{o}' -> '{n}'")
+    except Exception as e:
+        msg = f"Error processing {image_path}: {e}\n\n"
+        err_f.write(msg)
+        warn(msg.strip())
+
+
+def main() -> int:
+    root = os.getcwd()
+    log_path = os.path.join(root, "keywords_conversion_log.txt")
+    err_path = os.path.join(root, "keywords_conversion_error_log.txt")
+    log(f"Scanning under: {root}")
+
+    with open(log_path, "w", encoding="utf-8") as log_f, \
+         open(err_path, "w", encoding="utf-8") as err_f:
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                if name.lower().endswith(IMAGE_EXTS):
+                    process_image(os.path.join(dirpath, name), log_f, err_f)
+
+    ok(f"Done. log={log_path} err={err_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

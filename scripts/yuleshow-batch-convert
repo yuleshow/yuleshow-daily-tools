@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# yuleshow-batch-convert: batch-convert media files by extension via ffmpeg.
+# Usage: yuleshow-batch-convert <old_ext> <new_ext>
+# Example: yuleshow-batch-convert wav mp3
+
+set -euo pipefail
+
+log()  { printf '🚀 %s\n' "$*"; }
+ok()   { printf '✅ %s\n' "$*"; }
+err()  { printf '❌ %s\n' "$*" >&2; }
+
+if [ "$#" -ne 2 ]; then
+    err "Usage: yuleshow-batch-convert <old_ext> <new_ext>"
+    exit 1
+fi
+
+command -v ffmpeg >/dev/null 2>&1 || { err "ffmpeg not found"; exit 1; }
+
+old_ext="$1"
+new_ext="$2"
+
+log "Converting *.$old_ext -> *.$new_ext in: $PWD"
+
+shopt -s nullglob nocaseglob
+for i in *."$old_ext"; do
+    out="${i%.*}.$new_ext"
+    ffmpeg -hide_banner -loglevel error -i "$i" "$out"
+    ok "$i -> $out"
+done
+old_extension=$1
+new_extension=$2
+
+for i in *."$old_extension";
+  do ffmpeg -i "$i" "${i%.*}.$new_extension";
+done

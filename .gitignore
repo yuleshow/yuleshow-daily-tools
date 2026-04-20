@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs / tool outputs
+*.log
+keywords_conversion_log.txt
+keywords_conversion_error_log.txt
+unique_iptc_keywords_output.txt
+
+# Editor
+.vscode/
+.idea/
+
+# Local / secrets
+.sixth/

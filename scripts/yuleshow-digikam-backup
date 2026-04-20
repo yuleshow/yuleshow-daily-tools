@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# yuleshow-digikam-backup: dump digiKam MySQL DB and prune old backups.
+# Usage: yuleshow-digikam-backup
+# Config: ~/.yuleshow/digikam.conf (overrides defaults). Keys:
+#   MYSQL_USER, MYSQL_PASS, DB_NAME, BACKUP_DIR, KEEP_DAYS
+
+set -euo pipefail
+
+log()  { printf '🚀 %s\n' "$*"; }
+ok()   { printf '✅ %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*" >&2; }
+err()  { printf '❌ %s\n' "$*" >&2; }
+
+# Defaults (overridable by env or config file)
+MYSQL_USER="${MYSQL_USER:-digikamuser}"
+MYSQL_PASS="${MYSQL_PASS:-}"
+DB_NAME="${DB_NAME:-digikam}"
+BACKUP_DIR="${BACKUP_DIR:-$HOME/Backups/digikam}"
+KEEP_DAYS="${KEEP_DAYS:-14}"
+
+CONF_FILE="$HOME/.yuleshow/digikam.conf"
+if [ -f "$CONF_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF_FILE"
+fi
+
+command -v mysqldump >/dev/null 2>&1 || { err "mysqldump not found"; exit 1; }
+
+if [ -z "$MYSQL_PASS" ]; then
+    warn "MYSQL_PASS is empty. Set it in $CONF_FILE or use ~/.my.cnf"
+fi
+
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+FILENAME="${DB_NAME}_${TIMESTAMP}.sql.gz"
+
+mkdir -p "$BACKUP_DIR"
+
+log "Backing up database '$DB_NAME' -> $BACKUP_DIR/$FILENAME"
+if mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASS" --databases "$DB_NAME" | gzip > "$BACKUP_DIR/$FILENAME"; then
+    ok "Backup succeeded: $FILENAME"
+else
+    err "Backup failed"
+    exit 1
+fi
+
+log "Pruning backups older than $KEEP_DAYS days..."
+find "$BACKUP_DIR" -name "${DB_NAME}_*.sql.gz" -type f -mtime +"$KEEP_DAYS" -exec rm {} \;
+ok "Cleanup done."
+#!/bin/bash
+
+# ====== 配置檔 ======
+# 讀取 ~/.yuleshow/digikam.conf (若存在)，可覆蓋下列預設值。
+# 範例內容：
+#   MYSQL_USER=digikamuser
+#   MYSQL_PASS=dkpass123
+#   DB_NAME=digikam
+#   BACKUP_DIR=$HOME/Backups/digikam
+#   KEEP_DAYS=14
+CONF_FILE="$HOME/.yuleshow/digikam.conf"
+
+# 預設值
+MYSQL_USER="${MYSQL_USER:-digikamuser}"
+MYSQL_PASS="${MYSQL_PASS:-}"
+DB_NAME="${DB_NAME:-digikam}"
+BACKUP_DIR="${BACKUP_DIR:-$HOME/Backups/digikam}"
+KEEP_DAYS="${KEEP_DAYS:-14}"
+
+if [ -f "$CONF_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF_FILE"
+fi
+
+if ! command -v mysqldump >/dev/null 2>&1; then
+    echo "❌ mysqldump not found. Install mysql/mariadb client first."
+    exit 1
+fi
+
+if [ -z "$MYSQL_PASS" ]; then
+    echo "⚠️  MYSQL_PASS 未設定。請建立 $CONF_FILE 或使用 ~/.my.cnf"
+fi
+# ========================
+
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+FILENAME="${DB_NAME}_${TIMESTAMP}.sql.gz"
+
+mkdir -p "$BACKUP_DIR"
+
+# 執行備份
+mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASS" --databases "$DB_NAME" | gzip > "${BACKUP_DIR}/${FILENAME}"
+
+# 檢查成功與否
+if [ $? -eq 0 ]; then
+    echo "✅ 備份成功：$FILENAME"
+else
+    echo "❌ 備份失敗！"
+    exit 1
+fi
+
+# 清理舊備份
+find "$BACKUP_DIR" -name "${DB_NAME}_*.sql.gz" -type f -mtime +$KEEP_DAYS -exec rm {} \;
+
+echo "🧹 清理 $KEEP_DAYS 天前的舊備份完成"
+     

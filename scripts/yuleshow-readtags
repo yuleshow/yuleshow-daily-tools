@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# yuleshow-readtags: print IPTC Keywords and XMP Subject for images in a dir.
+# Usage: yuleshow-readtags [dir]
+
+set -euo pipefail
+
+log()  { printf '🚀 %s\n' "$*"; }
+err()  { printf '❌ %s\n' "$*" >&2; }
+
+command -v exiftool >/dev/null 2>&1 || { err "exiftool not found"; exit 1; }
+
+TARGET_DIR="${1:-.}"
+[ -d "$TARGET_DIR" ] || { err "Not a directory: $TARGET_DIR"; exit 1; }
+
+log "Reading tags in: $TARGET_DIR"
+
+find "$TARGET_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | while read -r FILE; do
+    echo "📷 $FILE"
+
+    SUBJECT_LINE=$(exiftool -s -XMP:Subject   "$FILE" | grep '^Subject'  | sed 's/^Subject[ \t]*:[ \t]*//')
+    KEYWORDS_LINE=$(exiftool -s -IPTC:Keywords "$FILE" | grep '^Keywords' | sed 's/^Keywords[ \t]*:[ \t]*//')
+
+    SUBJECT=$(echo "$SUBJECT_LINE"   | sed 's/  */ /g' | sed 's/ /, /g')
+    KEYWORDS=$(echo "$KEYWORDS_LINE" | sed 's/  */ /g' | sed 's/ /, /g')
+
+    echo "Subject  : $SUBJECT"
+    echo "Keywords : $KEYWORDS"
+    echo "---------------------------------------------"
+done
+#!/bin/bash
+
+TARGET_DIR="${1:-.}"
+
+find "$TARGET_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | while read -r FILE; do
+    echo "📷 $FILE"
+
+    SUBJECT_LINE=$(exiftool -s -XMP:Subject "$FILE" | grep '^Subject' | sed 's/^Subject[ \t]*:[ \t]*//')
+    KEYWORDS_LINE=$(exiftool -s -IPTC:Keywords "$FILE" | grep '^Keywords' | sed 's/^Keywords[ \t]*:[ \t]*//')
+
+    # 把多空格轉成單空格，再把空格變成逗號
+    SUBJECT=$(echo "$SUBJECT_LINE" | sed 's/  */ /g' | sed 's/ /, /g')
+    KEYWORDS=$(echo "$KEYWORDS_LINE" | sed 's/  */ /g' | sed 's/ /, /g')
+
+    echo "Subject                         : $SUBJECT"
+    echo "Keywords                        : $KEYWORDS"
+    echo "---------------------------------------------"
+done

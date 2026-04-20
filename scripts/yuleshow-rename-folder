@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""yuleshow-rename-folder: rename images in CWD and move into YYYYMMDD dirs.
+
+Usage: yuleshow-rename-folder
+Format: <folder>/YYYYMMDD_HHMMSS[-NNN]-<make>-<model>.<EXT>
+"""
+
+import os
+import re
+import sys
+from datetime import datetime
+
+from PIL import Image
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
+
+
+IMAGE_EXTS = (".jpg", ".jpeg", ".png")
+
+
+def clean(text: str) -> str:
+    return re.sub(r"\s+", "-", text.strip())
+
+
+def get_exif(path: str) -> dict:
+    try:
+        with Image.open(path) as img:
+            return img._getexif() or {}
+    except Exception:
+        return {}
+
+
+def format_name(date: datetime, make: str, model: str, ext: str, counter=None) -> str:
+    date_str = date.strftime("%Y%m%d_%H%M%S")
+    camera = f"{clean(make)}-{clean(model)}"
+    counter_str = f"-{counter:03d}" if counter is not None else ""
+    return f"{date_str}{counter_str}-{camera}.{ext.upper()}"
+
+
+def main() -> int:
+    log(f"Renaming and foldering images in: {os.getcwd()}")
+    for fn in os.listdir("."):
+        if not fn.lower().endswith(IMAGE_EXTS):
+            continue
+
+        exif = get_exif(fn)
+        date_str = exif.get(36867)
+        make = exif.get(271, "")
+        model = exif.get(272, "")
+
+        if not (date_str and make and model):
+            warn(f"Skip {fn}: missing EXIF")
+            continue
+
+        dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+        folder = dt.strftime("%Y%m%d")
+        os.makedirs(folder, exist_ok=True)
+
+        ext = fn.rsplit(".", 1)[-1]
+        base = os.path.join(folder, format_name(dt, make, model, ext))
+        new_name = base
+        counter = 1
+        while os.path.exists(new_name):
+            new_name = os.path.join(folder, format_name(dt, make, model, ext, counter))
+            counter += 1
+
+        os.rename(fn, new_name)
+        ok(f"{fn} -> {new_name}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

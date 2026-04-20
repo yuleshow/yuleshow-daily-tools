@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# yuleshow-hyphen2underscore: rename files in CWD, replacing "-" with "_".
+# Usage: yuleshow-hyphen2underscore
+
+set -euo pipefail
+
+log()  { printf '🚀 %s\n' "$*"; }
+ok()   { printf '✅ %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*" >&2; }
+
+log "Replacing '-' with '_' in filenames under: $PWD"
+
+shopt -s nullglob
+for f in *; do
+    new="${f//-/_}"
+    [ "$new" = "$f" ] && continue
+    if [ -e "$new" ]; then
+        warn "Skip '$f' (target '$new' exists)"
+    else
+        mv -- "$f" "$new"
+        ok "$f -> $new"
+    fi
+done
+#!/bin/bash
+
+for f in *
+do
+  new="${f//-/_}"
+  if [ "$new" != "$f" ]
+  then
+    if [ -e "$new" ]
+    then
+      echo not renaming \""$f"\" because \""$new"\" already exists
+    else
+      echo moving "$f" to "$new"
+    mv "$f" "$new"
+  fi
+fi
+done

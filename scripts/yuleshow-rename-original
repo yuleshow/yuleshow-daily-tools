@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""yuleshow-rename-original: flatten subfolders, rename JPGs, tidy CWD.
+
+Usage: yuleshow-rename-original
+Behavior:
+  1. Move all files from first-level subdirs into CWD, then remove the subdirs.
+  2. Rename *.JPG via EXIF: YYYYMMDD_HHMMSS-<make>-<model>.JPG
+     Duplicates get -1, -2, -3, -4 suffix.
+  3. Remove *.AAE files.
+  4. Rename other files to YYYYMMDD_HHMMSS-<rand>.ext using current time.
+"""
+
+import glob
+import os
+import random
+import shutil
+import sys
+from datetime import datetime
+from os import path
+
+from exif import Image
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
+
+
+def move_photo(my_photo: str) -> None:
+    with open(my_photo, "rb") as image_file:
+        my_image = Image(image_file)
+
+    try:
+        dt_raw = my_image.datetime_original
+    except AttributeError:
+        dt_raw = f"2222:22:22 {random.randint(100000, 999999)}"
+
+    dt_clean = dt_raw.replace(":", "")
+    parts = dt_clean.split(" ")
+    new_date, new_time = parts[0], parts[1]
+
+    try:
+        new_make = my_image.make.replace(" ", "-")
+    except AttributeError:
+        new_make = "NONE"
+    try:
+        new_model = my_image.model.replace(" ", "-")
+    except AttributeError:
+        new_model = "NONE"
+
+    new_name = f"{new_date}_{new_time}-{new_make}-{new_model}"
+    new_jpg = f"{new_name}.JPG"
+    for i in range(1, 5):
+        if path.exists(new_jpg):
+            new_jpg = f"{new_name}-{i}.JPG"
+        else:
+            break
+
+    os.rename(my_photo, new_jpg)
+    ok(f"{my_photo} -> {new_jpg}")
+
+
+def main() -> int:
+    log(f"Flattening + renaming in: {os.getcwd()}")
+
+    # Flatten first-level subdirs into CWD
+    for source_dir in glob.glob("*/"):
+        for name in os.listdir(source_dir):
+            shutil.move(os.path.join(source_dir, name), "./")
+        try:
+            os.rmdir(source_dir)
+        except OSError as e:
+            warn(f"rmdir {source_dir}: {e.strerror}")
+
+    # Rename / tidy files
+    for file in glob.glob("*.*"):
+        stem, _, ext = file.rpartition(".")
+        if ext in ("JPG", "jpg"):
+            move_photo(file)
+        elif ext == "AAE":
+            os.remove(file)
+            ok(f"removed {file}")
+        else:
+            now = datetime.now()
+            new_name = f"{now.strftime('%Y%m%d_%H%M%S')}-{random.randint(1000, 9999)}.{ext}"
+            os.rename(file, new_name)
+            ok(f"{file} -> {new_name}")
+
+    log("Done!")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""yuleshow-get-tags: collect unique IPTC Keywords from images under CWD.
+
+Usage: yuleshow-get-tags
+Output: unique_iptc_keywords_output.txt in CWD.
+"""
+
+import os
+import sys
+
+import pyexiv2
+
+
+def log(msg):  print(f"🚀 {msg}")
+def ok(msg):   print(f"✅ {msg}")
+def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
+
+
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif")
+
+
+def iptc_keywords(image_path: str):
+    try:
+        with pyexiv2.Image(image_path) as img:
+            data = img.read_iptc()
+        return data.get("Iptc.Application2.Keywords")
+    except Exception as e:
+        warn(f"Read failed {image_path}: {e}")
+        return None
+
+
+def main() -> int:
+    root = os.getcwd()
+    out_path = os.path.join(root, "unique_iptc_keywords_output.txt")
+    log(f"Scanning images under: {root}")
+
+    unique = set()
+    for dirpath, _dirs, files in os.walk(root):
+        depth = dirpath[len(root):].count(os.sep)
+        print(f"🔍 depth={depth}: {dirpath}")
+        for name in files:
+            if not name.lower().endswith(IMAGE_EXTS):
+                continue
+            kw = iptc_keywords(os.path.join(dirpath, name))
+            if kw:
+                unique.update(kw)
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(", ".join(sorted(unique)))
+    ok(f"Wrote {len(unique)} unique keywords -> {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
