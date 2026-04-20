@@ -16,7 +16,7 @@ The installer will:
 
 1. Install system dependencies (Homebrew on macOS; `apt` / `dnf` / `pacman` on Linux).
 2. Create a Python virtualenv at `~/.local/share/yuleshow-daily-tools/venv`.
-3. Install Python libraries (Pillow, pillow-heif, pillow-avif-plugin, pyexiv2, lunarcalendar, pdf2image, exifread, exif, opencc-python-reimplemented).
+3. Install Python libraries (Pillow, pillow-heif, pillow-avif-plugin, pyexiv2, lunarcalendar, pdf2image, exif, opencc-python-reimplemented).
 4. Drop thin wrapper scripts into `~/.local/bin/` for every tool in `scripts/`.
 
 ### Options
@@ -43,8 +43,6 @@ export PATH="$HOME/.local/bin:$PATH"
 | --- | --- |
 | `yuleshow-rename` | Rename JPGs in CWD by EXIF date+camera (Pillow). |
 | `yuleshow-rename-folder` | Same as above, but also move into `YYYYMMDD/` folders. |
-| `yuleshow-rename-exifread` | Rename JPG/PNG in CWD via exifread, no folders. |
-| `yuleshow-rename-folder-exifread` | Rename + move into `YYYYMMDD/` via exifread. |
 | `yuleshow-rename-original` | Flatten subdirs, rename JPGs, remove `.AAE`, tidy CWD. |
 | `yuleshow-rename-lunar-folder` | Append lunar/festival/solar-term/US-holiday info to `YYYYMMDD*` folders. |
 | `yuleshow-hyphen2underscore` | Rename files in CWD: `-` -> `_`. |

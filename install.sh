@@ -142,7 +142,6 @@ setup_venv() {
         pyexiv2 \
         lunarcalendar \
         pdf2image \
-        exifread \
         exif \
         opencc-python-reimplemented
 }
