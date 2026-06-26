@@ -82,8 +82,17 @@ export PATH="$HOME/.local/bin:$PATH"
 
 | Command | Description |
 | --- | --- |
-| `yuleshow-clean` | **macOS-only.** System maintenance: caches, Adobe, `.DS_Store`, AppleDouble. |
+| `yuleshow-clean` | **macOS-only.** System maintenance, plus optional external-volume cleanup for `.DS_Store`, AppleDouble, and macOS service folders. |
 | `yuleshow-digikam-backup` | Dump digiKam MySQL DB, keep `KEEP_DAYS` history. See config below. |
+
+#### `yuleshow-clean` examples
+
+```bash
+yuleshow-clean                    # normal system maintenance
+yuleshow-clean /Volumes/SD4T      # clean macOS metadata from an external volume
+yuleshow-clean --dry-run /Volumes/SD4T
+yuleshow-clean --system /Volumes/SD4T
+```
 
 #### `yuleshow-digikam-backup` config
 

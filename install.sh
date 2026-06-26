@@ -5,6 +5,7 @@
 # Usage:
 #   ./install.sh              # install everything
 #   ./install.sh --no-system  # skip system package installation
+#   ./install.sh --no-path    # skip updating shell rc PATH
 #   ./install.sh --uninstall  # remove installed wrappers and venv
 #
 # Environment overrides:
@@ -22,13 +23,15 @@ VENV_DIR="$APP_DIR/venv"
 
 SKIP_SYSTEM=0
 UNINSTALL=0
+SKIP_PATH=0
 
 for arg in "$@"; do
     case "$arg" in
         --no-system) SKIP_SYSTEM=1 ;;
+        --no-path)   SKIP_PATH=1 ;;
         --uninstall) UNINSTALL=1 ;;
         -h|--help)
-            sed -n '2,12p' "$0"; exit 0 ;;
+            sed -n '2,13p' "$0"; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; exit 1 ;;
     esac
 done
@@ -61,6 +64,22 @@ uninstall() {
         log "Removing $APP_DIR"
         rm -rf "$APP_DIR"
     fi
+
+    log "Cleaning PATH entries from shell rc files"
+    for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+        [ -f "$rc" ] || continue
+        if grep -Fq "# added by yuleshow-daily-tools installer" "$rc"; then
+            # Remove marker line and the export PATH line that follows it.
+            tmp="$(mktemp)"
+            awk '
+                /# added by yuleshow-daily-tools installer/ { skip=2; next }
+                skip>0 { skip--; next }
+                { print }
+            ' "$rc" > "$tmp" && mv "$tmp" "$rc"
+            echo "  cleaned $rc"
+        fi
+    done
+
     log "Uninstall complete."
 }
 
@@ -143,6 +162,7 @@ setup_venv() {
         lunarcalendar \
         pdf2image \
         exif \
+        exifread \
         opencc-python-reimplemented
 }
 
@@ -177,6 +197,72 @@ EOF
     done
 }
 
+# ---------- PATH setup ----------
+add_path_to_rc() {
+    local rc="$1"
+    local marker="# added by yuleshow-daily-tools installer"
+    local line="export PATH=\"$BIN_DIR:\$PATH\""
+
+    [ -f "$rc" ] || touch "$rc"
+
+    if grep -Fq "$marker" "$rc" 2>/dev/null; then
+        echo "  $rc already configured"
+        return 0
+    fi
+    if grep -Fq "$BIN_DIR" "$rc" 2>/dev/null; then
+        echo "  $rc already references $BIN_DIR"
+        return 0
+    fi
+
+    {
+        printf '\n%s\n' "$marker"
+        printf '%s\n' "$line"
+    } >> "$rc"
+    echo "  updated $rc"
+}
+
+setup_path() {
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) return 0 ;;
+    esac
+
+    if [ "$SKIP_PATH" -eq 1 ]; then
+        echo
+        warn "$BIN_DIR is not in your PATH (--no-path given)."
+        echo "    Add this line to ~/.zshrc or ~/.bashrc:"
+        echo "        export PATH=\"$BIN_DIR:\$PATH\""
+        return 0
+    fi
+
+    log "Adding $BIN_DIR to PATH in shell rc files"
+
+    local current_shell rc_candidates=()
+    current_shell="$(basename "${SHELL:-}")"
+    case "$current_shell" in
+        zsh)  rc_candidates+=("$HOME/.zshrc") ;;
+        bash)
+            if [ "$OS" = "macos" ]; then
+                rc_candidates+=("$HOME/.bash_profile")
+            else
+                rc_candidates+=("$HOME/.bashrc")
+            fi
+            ;;
+        *)
+            [ -f "$HOME/.zshrc" ]        && rc_candidates+=("$HOME/.zshrc")
+            [ -f "$HOME/.bashrc" ]       && rc_candidates+=("$HOME/.bashrc")
+            [ -f "$HOME/.bash_profile" ] && rc_candidates+=("$HOME/.bash_profile")
+            [ ${#rc_candidates[@]} -eq 0 ] && rc_candidates+=("$HOME/.profile")
+            ;;
+    esac
+
+    for rc in "${rc_candidates[@]}"; do
+        add_path_to_rc "$rc"
+    done
+
+    echo
+    warn "Restart your shell or run: source ${rc_candidates[0]}"
+}
+
 # ---------- Post-install hints ----------
 post_install_notes() {
     echo
@@ -185,15 +271,7 @@ post_install_notes() {
     echo "    venv     : $VENV_DIR"
     echo "    sources  : $SCRIPTS_DIR"
 
-    case ":$PATH:" in
-        *":$BIN_DIR:"*) ;;
-        *)
-            echo
-            warn "$BIN_DIR is not in your PATH."
-            echo "    Add this line to ~/.zshrc or ~/.bashrc:"
-            echo "        export PATH=\"$BIN_DIR:\$PATH\""
-            ;;
-    esac
+    setup_path
 
     if [ "$OS" = "linux" ]; then
         echo

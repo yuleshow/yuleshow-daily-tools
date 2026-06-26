@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# Configuration
+TARGET_DIR="."
+LOG_FILE="yuleshow_conversion.log"
+
+echo "------------------------------------------------"
+echo "Starting smart recursive conversion (H.265)"
+echo "Logging to: $LOG_FILE"
+echo "------------------------------------------------"
+
+echo "--- Conversion Started: $(date) ---" >> "$LOG_FILE"
+
+find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.m4v" \) \
+    ! -name "*-echoshow.mp4" -print0 | while IFS= read -r -d '' FILE; do
+
+    FILENAME="${FILE%.*}"
+    OUTPUT_PATH="./${FILENAME}-echoshow.mp4"
+
+    # 1. Skip if already converted
+    if [ -f "$OUTPUT_PATH" ]; then
+        echo "SKIPPED: $FILE (Output exists)" >> "$LOG_FILE"
+        continue
+    fi
+
+    # 2. Check Resolution
+    # ffprobe pulls the height of the first video stream
+    HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "$FILE")
+
+    if [ -z "$HEIGHT" ] || [ "$HEIGHT" -lt 720 ]; then
+        echo "SKIPPED: $FILE (Resolution ${HEIGHT:-unknown}p is below 720p)" | tee -a "$LOG_FILE"
+        continue
+    fi
+
+    echo "PROCESSING: $FILE (${HEIGHT}p)" | tee -a "$LOG_FILE"
+
+    # 3. Encode using M1 Hardware
+    ffmpeg -nostdin -hide_banner -loglevel error -stats \
+      -i "$FILE" \
+      -c:v hevc_videotoolbox \
+      -b:v 1200k \
+      -fpsmax 30 \
+      -pix_fmt yuv420p \
+      -vf "scale='min(1280,iw)':-2" \
+      -c:a aac -b:a 128k -ac 2 \
+      -movflags +faststart \
+      -y "$OUTPUT_PATH"
+
+    if [ $? -eq 0 ]; then
+        OLD_SIZE=$(du -h "$FILE" | cut -f1)
+        NEW_SIZE=$(du -h "$OUTPUT_PATH" | cut -f1)
+        echo "SUCCESS: $FILE [$OLD_SIZE -> $NEW_SIZE]" | tee -a "$LOG_FILE"
+    else
+        echo "FAILED: $FILE" | tee -a "$LOG_FILE"
+        # Remove partial file on failure
+        [ -f "$OUTPUT_PATH" ] && rm "$OUTPUT_PATH"
+    fi
+done
+
+echo "--- Batch Complete: $(date) ---" >> "$LOG_FILE"

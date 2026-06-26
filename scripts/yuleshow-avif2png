@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# yuleshow-avif2png
+# Convert AVIF images to PNG.
+# Usage:
+#   yuleshow-avif2png image.avif
+#   yuleshow-avif2png *.avif
+#   yuleshow-avif2png folder
+#   yuleshow-avif2png -r folder
+#   yuleshow-avif2png -o output_folder folder
+#
+# Dependencies:
+#   Preferred: ImageMagick 7+  -> brew install imagemagick
+#   Fallback:  ffmpeg          -> brew install ffmpeg
+
+recursive=0
+force=0
+out_dir=""
+
+usage() {
+  cat <<'EOF'
+用法：
+  yuleshow-avif2png [选项] <avif文件/文件夹...>
+
+选项：
+  -r, --recursive       递归处理文件夹里的 .avif 文件
+  -o, --out-dir DIR     输出到指定文件夹；默认输出到原文件同目录
+  -f, --force           覆盖已存在的 .png
+  -h, --help            显示帮助
+
+例子：
+  yuleshow-avif2png a.avif
+  yuleshow-avif2png *.avif
+  yuleshow-avif2png ~/Pictures/avif
+  yuleshow-avif2png -r ~/Pictures/avif
+  yuleshow-avif2png -o ~/Desktop/png_out ~/Pictures/avif
+EOF
+}
+
+die() {
+  echo "错误：$*" >&2
+  exit 1
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+converter=""
+if have_cmd magick; then
+  converter="magick"
+elif have_cmd ffmpeg; then
+  converter="ffmpeg"
+else
+  die "没有找到 magick 或 ffmpeg。请先安装：brew install imagemagick  或  brew install ffmpeg"
+fi
+
+inputs=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r|--recursive)
+      recursive=1
+      shift
+      ;;
+    -f|--force)
+      force=1
+      shift
+      ;;
+    -o|--out-dir)
+      [[ $# -ge 2 ]] || die "--out-dir 后面需要一个文件夹"
+      out_dir="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do
+        inputs+=("$1")
+        shift
+      done
+      ;;
+    -*)
+      die "未知选项：$1"
+      ;;
+    *)
+      inputs+=("$1")
+      shift
+      ;;
+  esac
+done
+
+[[ ${#inputs[@]} -gt 0 ]] || { usage; exit 1; }
+
+if [[ -n "$out_dir" ]]; then
+  mkdir -p "$out_dir"
+fi
+
+convert_one() {
+  local src="$1"
+
+  [[ -f "$src" ]] || return 0
+
+  local lower="${src,,}"
+  [[ "$lower" == *.avif ]] || return 0
+
+  local base name dst
+  base="$(basename "$src")"
+  name="${base%.*}"
+
+  if [[ -n "$out_dir" ]]; then
+    dst="$out_dir/$name.png"
+  else
+    dst="$(dirname "$src")/$name.png"
+  fi
+
+  if [[ -e "$dst" && "$force" -ne 1 ]]; then
+    echo "跳过：$dst 已存在（用 -f 覆盖）"
+    return 0
+  fi
+
+  echo "转换：$src -> $dst"
+
+  if [[ "$converter" == "magick" ]]; then
+    magick "$src" "$dst"
+  else
+    ffmpeg -v error -y -i "$src" "$dst"
+  fi
+}
+
+process_path() {
+  local p="$1"
+
+  if [[ -f "$p" ]]; then
+    convert_one "$p"
+  elif [[ -d "$p" ]]; then
+    if [[ "$recursive" -eq 1 ]]; then
+      while IFS= read -r -d '' f; do
+        convert_one "$f"
+      done < <(find "$p" -type f \( -iname '*.avif' \) -print0)
+    else
+      while IFS= read -r -d '' f; do
+        convert_one "$f"
+      done < <(find "$p" -maxdepth 1 -type f \( -iname '*.avif' \) -print0)
+    fi
+  else
+    echo "警告：找不到 $p，已跳过" >&2
+  fi
+}
+
+for p in "${inputs[@]}"; do
+  process_path "$p"
+done
+
+echo "完成。"

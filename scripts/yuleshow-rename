@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""yuleshow-rename: rename JPGs in CWD by EXIF date + camera (Pillow).
+"""yuleshow-rename: rename images in CWD by EXIF date + camera.
 
 Usage: yuleshow-rename
-Format: YYYYMMDD_HHMMSS[-NNN]-<make>-<model>.JPG
+Format: YYYYMMDD_HHMMSS[-NNN]-<make>-<model>.<EXT>
 Strips leading "JK-Imaging,-Ltd.-" from the camera prefix.
+Supports JPEG, Sony ARW, and Fuji RAF raw files.
 """
 
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 
+import exifread
 from PIL import Image
 
 
@@ -20,18 +23,53 @@ def warn(msg): print(f"⚠️  {msg}", file=sys.stderr)
 
 
 IMAGE_EXTS = (".jpg", ".jpeg")
+RAW_EXTS = (".arw", ".raf")
+ALL_EXTS = IMAGE_EXTS + RAW_EXTS
 
 
 def clean(text: str) -> str:
     return re.sub(r"\s+", "-", text.strip())
 
 
-def get_exif(path: str) -> dict:
+def get_exif_jpeg(path: str) -> dict:
     try:
         with Image.open(path) as img:
             return img._getexif() or {}
     except Exception:
         return {}
+
+
+def get_exif_raw(path: str) -> tuple:
+    """Read EXIF from raw files using exifread, with exiftool fallback. Returns (date_str, make, model)."""
+    # Try exifread first (read all tags, no stop_tag)
+    try:
+        with open(path, "rb") as f:
+            tags = exifread.process_file(f, details=False)
+        date_str = str(
+            tags.get("EXIF DateTimeOriginal")
+            or tags.get("EXIF DateTimeDigitized")
+            or tags.get("Image DateTime")
+            or ""
+        )
+        make = str(tags.get("Image Make", ""))
+        model = str(tags.get("Image Model", ""))
+        if date_str:
+            return date_str, make or "Unknown", model or "Camera"
+    except Exception:
+        pass
+
+    # Fallback: use exiftool (handles all RAF variants reliably)
+    try:
+        out = subprocess.check_output(
+            ["exiftool", "-s3", "-DateTimeOriginal", "-Make", "-Model", path],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip().splitlines()
+        date_str = out[0] if len(out) > 0 else ""
+        make = out[1] if len(out) > 1 else "Unknown"
+        model = out[2] if len(out) > 2 else "Camera"
+        return date_str or None, make or "Unknown", model or "Camera"
+    except Exception:
+        return None, "Unknown", "Camera"
 
 
 def format_name(date: datetime, make: str, model: str, ext: str, counter=None) -> str:
@@ -46,11 +84,18 @@ def main() -> int:
     log(f"Renaming images in: {os.getcwd()}")
     seen = {}
     for fn in os.listdir("."):
-        if not fn.lower().endswith(IMAGE_EXTS):
+        lower = fn.lower()
+        if not lower.endswith(ALL_EXTS):
             continue
 
-        exif = get_exif(fn)
-        date_str = exif.get(36867)
+        if lower.endswith(RAW_EXTS):
+            date_str, make, model = get_exif_raw(fn)
+        else:
+            exif = get_exif_jpeg(fn)
+            date_str = exif.get(36867)
+            make = exif.get(271, "Unknown")
+            model = exif.get(272, "Camera")
+
         if not date_str:
             warn(f"Skip {fn}: no DateTimeOriginal")
             continue
@@ -60,8 +105,6 @@ def main() -> int:
             warn(f"Bad date {date_str} in {fn}")
             continue
 
-        make = exif.get(271, "Unknown")
-        model = exif.get(272, "Camera")
         ext = os.path.splitext(fn)[1][1:]
 
         base = format_name(dt, make, model, ext)

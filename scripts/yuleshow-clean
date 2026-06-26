@@ -1,127 +1,240 @@
 #!/usr/bin/env bash
-# yuleshow-clean: macOS system maintenance (caches, Adobe, .DS_Store, AppleDouble).
-# Usage: yuleshow-clean
+# yuleshow-clean: macOS system and external-volume maintenance.
+# Usage:
+#   yuleshow-clean                    # run normal macOS maintenance
+#   yuleshow-clean /Volumes/SD4T      # clean one external volume
+#   yuleshow-clean --system /Volumes/SD4T
+#   yuleshow-clean --dry-run /Volumes/SD4T
 # Note: macOS-only (uses defaults, dot_clean, purge).
 
-set -uo pipefail
+set -euo pipefail
 
 log()  { printf '🚀 %s\n' "$*"; }
 ok()   { printf '✅ %s\n' "$*"; }
 warn() { printf '⚠️  %s\n' "$*" >&2; }
+err()  { printf '❌ %s\n' "$*" >&2; }
+
+usage() {
+    sed -n '2,8p' "$0" | sed 's/^# //'
+}
+
+DRY_RUN=0
+RUN_SYSTEM=0
+TARGETS=()
+
+if [ "$#" -eq 0 ]; then
+    RUN_SYSTEM=1
+fi
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --system)
+            RUN_SYSTEM=1
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            while [ "$#" -gt 0 ]; do
+                TARGETS+=("$1")
+                shift
+            done
+            ;;
+        -*)
+            err "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+        *)
+            TARGETS+=("$1")
+            shift
+            ;;
+    esac
+done
 
 if [ "$(uname -s)" != "Darwin" ]; then
     warn "yuleshow-clean is macOS-only. Current OS: $(uname -s). Exiting."
     exit 0
 fi
 
-log "Starting system maintenance for 梅璽閣主..."
+run_cmd() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf 'DRY-RUN: '
+        printf '%q ' "$@"
+        printf '\n'
+    else
+        "$@"
+    fi
+}
 
-# 1. Pre-authorize sudo, keep it alive while script runs
-sudo -v
-while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+start_sudo_keepalive() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        return 0
+    fi
 
-# 2. Block .DS_Store on USB / network volumes
-log "Enabling USB/Network dot-file protection..."
-defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
-defaults write com.apple.desktopservices DSDontWriteUSBStores     -bool true
+    sudo -v
+    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+}
 
-# 3. Homebrew cleanup (protects API cache)
-if command -v brew >/dev/null 2>&1; then
-    log "Cleaning up Homebrew..."
-    export HOMEBREW_NO_AUTO_UPDATE=1
-    brew cleanup -s
-else
-    warn "Homebrew not found, skipping."
-fi
+clean_system() {
+    log "Starting system maintenance for 梅璽閣主..."
+    start_sudo_keepalive
 
-# 4. Purge inactive RAM
-log "Purging inactive RAM..."
-sudo purge
+    log "Enabling USB/Network dot-file protection..."
+    run_cmd defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
+    run_cmd defaults write com.apple.desktopservices DSDontWriteUSBStores -bool true
 
-# 5. Adobe Premiere cache
-log "Cleaning Adobe Premiere Pro cache..."
-ADOBE_COMMON="$HOME/Library/Application Support/Adobe/Common"
-if [ -d "$ADOBE_COMMON" ]; then
-    rm -rf "$ADOBE_COMMON/Media Cache/"*       2>/dev/null
-    rm -rf "$ADOBE_COMMON/Media Cache Files/"* 2>/dev/null
-    rm -rf "$ADOBE_COMMON/Peak Files/"*        2>/dev/null
-    rm -rf "$ADOBE_COMMON/PTX/"*               2>/dev/null
-fi
+    if command -v brew >/dev/null 2>&1; then
+        log "Cleaning up Homebrew..."
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        run_cmd brew cleanup -s
+    else
+        warn "Homebrew not found, skipping."
+    fi
 
-# 6. Merge AppleDouble files in project dirs
-log "Merging AppleDouble files in project directories..."
-[ -d "$HOME/yuleshow-github/" ] && dot_clean -m "$HOME/yuleshow-github/"
-[ -d "$HOME/Pictures/" ]        && dot_clean -m "$HOME/Pictures/"
+    log "Purging inactive RAM..."
+    run_cmd sudo purge
 
-# 7. Remove local .DS_Store
-log "Cleaning local .DS_Store files..."
-for d in Desktop Downloads Documents Pictures; do
-    [ -d "$HOME/$d" ] && find "$HOME/$d" -name ".DS_Store" -depth -exec rm {} \; 2>/dev/null
+    log "Cleaning Adobe Premiere Pro cache..."
+    ADOBE_COMMON="$HOME/Library/Application Support/Adobe/Common"
+    if [ -d "$ADOBE_COMMON" ]; then
+        run_cmd rm -rf "$ADOBE_COMMON/Media Cache/"* \
+                       "$ADOBE_COMMON/Media Cache Files/"* \
+                       "$ADOBE_COMMON/Peak Files/"* \
+                       "$ADOBE_COMMON/PTX/"*
+    fi
+
+    log "Merging AppleDouble files in project directories..."
+    [ -d "$HOME/yuleshow-github" ] && run_cmd dot_clean -m "$HOME/yuleshow-github"
+    [ -d "$HOME/Pictures" ] && run_cmd dot_clean -m "$HOME/Pictures"
+
+    log "Cleaning local .DS_Store files..."
+    for dir in Desktop Downloads Documents Pictures; do
+        [ -d "$HOME/$dir" ] && run_cmd find "$HOME/$dir" -name .DS_Store -type f -depth -exec rm -f {} +
+    done
+
+    log "Clearing user caches (protecting Homebrew)..."
+    if [ -d "$HOME/Library/Caches" ]; then
+        run_cmd find "$HOME/Library/Caches" -mindepth 1 -maxdepth 1 ! -name Homebrew -exec rm -rf {} +
+    fi
+}
+
+clean_volume() {
+    local target="$1"
+    local service_dir
+
+    if [ ! -d "$target" ]; then
+        warn "Not a directory, skipping: $target"
+        return 0
+    fi
+
+    case "$target" in
+        /Volumes/*) ;;
+        *)
+            warn "Skipping non-volume path: $target"
+            warn "Pass an external volume such as /Volumes/SD4T."
+            return 0
+            ;;
+    esac
+
+    if [ "$target" = "/Volumes" ]; then
+        warn "Refusing to clean /Volumes itself. Pass a mounted volume under it."
+        return 0
+    fi
+
+    log "Cleaning external volume: $target"
+
+    if command -v dot_clean >/dev/null 2>&1; then
+        log "Merging AppleDouble metadata..."
+        run_cmd dot_clean -m "$target"
+    else
+        warn "dot_clean not found, skipping AppleDouble merge."
+    fi
+
+    log "Removing .DS_Store files..."
+    run_cmd find "$target" -name .DS_Store -type f -depth -exec rm -f {} +
+
+    log "Removing remaining AppleDouble files..."
+    run_cmd find "$target" -name '._*' -type f -depth -exec rm -f {} +
+
+    log "Removing top-level macOS service folders..."
+    for service_dir in \
+        .DocumentRevisions-V100 \
+        .Spotlight-V100 \
+        .TemporaryItems \
+        .Trashes \
+        .fseventsd; do
+        if [ -e "$target/$service_dir" ]; then
+            run_cmd rm -rf "$target/$service_dir"
+        fi
+    done
+
+    ok "Volume cleanup complete: $target"
+}
+
+detect_usb_volumes() {
+    # Find mounted external/USB volumes (physical disks, not disk images or internal)
+    local vol
+    while IFS= read -r vol; do
+        [ -z "$vol" ] && continue
+        # Skip the boot volume and /Volumes itself
+        [ "$vol" = "/" ] && continue
+        # Check if already in TARGETS
+        local already=0
+        for t in "${TARGETS[@]}"; do
+            [ "$t" = "$vol" ] && already=1 && break
+        done
+        [ "$already" -eq 1 ] && continue
+        TARGETS+=("$vol")
+        log "Auto-detected USB/external volume: $vol"
+    done < <(
+        diskutil list -plist external physical 2>/dev/null \
+        | plutil -extract AllDisksAndPartitions json -o - - 2>/dev/null \
+        | python3 -c '
+import json, subprocess, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for disk in data:
+    parts = disk.get("Partitions", [])
+    if not parts:
+        parts = [disk]
+    for p in parts:
+        dev = p.get("DeviceIdentifier", "")
+        if not dev:
+            continue
+        try:
+            info = subprocess.check_output(
+                ["diskutil", "info", "-plist", dev],
+                text=True, stderr=subprocess.DEVNULL,
+            )
+            import plistlib
+            pinfo = plistlib.loads(info.encode())
+            mp = pinfo.get("MountPoint", "")
+            if mp and mp.startswith("/Volumes/"):
+                print(mp)
+        except Exception:
+            pass
+' 2>/dev/null
+    )
+}
+
+detect_usb_volumes
+
+for target in "${TARGETS[@]}"; do
+    clean_volume "$target"
 done
 
-# 8. Clear user caches (protect Homebrew API cache)
-log "Clearing user caches (protecting Homebrew)..."
-find "$HOME/Library/Caches" -mindepth 1 -maxdepth 1 ! -name "Homebrew" -exec rm -rf {} \; 2>/dev/null
+if [ "$RUN_SYSTEM" -eq 1 ]; then
+    clean_system
+fi
 
 ok "Maintenance complete! 梅璽閣主, your workspace is optimized."
-#!/bin/bash
-
-# --- 梅璽閣 系統維護工具 V9 ---
-# macOS-only: uses `defaults`, `dot_clean`, `purge`, `sips`, Adobe paths.
-if [ "$(uname -s)" != "Darwin" ]; then
-    echo "⚠️  yuleshow-clean is macOS-only. Current OS: $(uname -s). Exiting."
-    exit 0
-fi
-
-echo "🚀 Starting ultimate maintenance for 梅璽閣主..."
-
-# 0. 預先請求 Sudo 權限，避免中間彈密碼
-sudo -v
-# 保持 sudo 活躍直到腳本結束
-while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
-
-# 1. USB/Network 保護
-echo "🛡 Ensuring USB/Network dot-file protection is ON..."
-defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
-defaults write com.apple.desktopservices DSDontWriteUSBStores -bool true
-
-# 2. Homebrew 清理 (現在會快很多)
-if command -v brew &> /dev/null; then
-    echo "📦 Cleaning up Homebrew..."
-    # 關閉自動更新 API，避免每次都下載
-    export HOMEBREW_NO_AUTO_UPDATE=1
-    brew cleanup -s
-else
-    echo "⚠️ Homebrew not found, skipping."
-fi
-
-# 3. 釋放內存
-echo "🧹 Purging inactive RAM..."
-sudo purge
-
-# 4. Adobe Premiere 緩存清理
-echo "🎬 Cleaning Adobe Premiere Pro Cache..."
-ADOBE_COMMON="$HOME/Library/Application Support/Adobe/Common"
-if [ -d "$ADOBE_COMMON" ]; then
-    rm -rf "$ADOBE_COMMON/Media Cache/"*
-    rm -rf "$ADOBE_COMMON/Media Cache Files/"*
-    rm -rf "$ADOBE_COMMON/Peak Files/"*
-    rm -rf "$ADOBE_COMMON/PTX/"*
-fi
-
-# 5. 合併 AppleDouble 文件
-echo "🔗 Merging AppleDouble files in project directories..."
-[ -d ~/yuleshow-github/ ] && dot_clean -m ~/yuleshow-github/
-[ -d ~/Pictures/ ] && dot_clean -m ~/Pictures/
-
-# 6. 清理本地垃圾文件
-echo "🔍 Cleaning up local .DS_Store files..."
-for dir in Desktop Downloads Documents Pictures; do
-    [ -d ~/$dir ] && find ~/$dir -name ".DS_Store" -depth -exec rm {} \; 2>/dev/null
-done
-
-# 7. 智能清理用戶緩存 (排除 Homebrew 緩存以避免重複下載)
-echo "📂 Clearing user caches (protecting Homebrew API)..."
-find ~/Library/Caches -mindepth 1 -maxdepth 1 ! -name "Homebrew" -exec rm -rf {} \; 2>/dev/null
-
-echo "✨ Maintenance complete! 梅璽閣主, your workspace is optimized."

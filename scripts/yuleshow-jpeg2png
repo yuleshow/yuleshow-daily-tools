@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# yuleshow-jpeg2png
+# Description: Converts JPEG/JPG images to PNG format using ffmpeg.
+#              Supports single file conversion, batch directories, and cleanups.
+# ==============================================================================
+
+set -e # Exit immediately if a command exits with a non-zero status
+
+# Print usage instructions
+usage() {
+    cat << EOF
+Usage: $(basename "$0") [options] <file_or_directory>
+
+Options:
+  -d, --delete    Delete the original JPEG/JPG file after successful conversion.
+  -h, --help      Show this help message.
+
+Examples:
+  $(basename "$0") image.jpg
+  $(basename "$0") --delete image.jpeg
+  $(basename "$0") /path/to/images_dir
+EOF
+    exit 1
+}
+
+# Check for required dependency
+if ! command -v ffmpeg &> /dev/null; then
+    echo "Error: ffmpeg is required but not installed." >&2
+    echo "Install it via Homebrew: brew install ffmpeg" >&2
+    exit 1
+fi
+
+DELETE_ORIGINAL=false
+TARGET=""
+
+# Parse flags and arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d|--delete)
+            DELETE_ORIGINAL=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage
+            ;;
+        *)
+            if [ -z "$TARGET" ]; then
+                TARGET="$1"
+            else
+                echo "Error: Only one target file or directory can be specified." >&2
+                usage
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Ensure a target was provided
+if [ -z "$TARGET" ]; then
+    echo "Error: Missing target file or directory." >&2
+    usage
+fi
+
+# Core conversion function
+convert_file() {
+    local input_file="$1"
+    # Generate output path by stripping .jpg or .jpeg and appending .png
+    local output_file="${input_file%.*}.png"
+
+    echo "Converting: '$input_file' -> '$output_file'"
+    
+    # Run ffmpeg with minimized logging output
+    if ffmpeg -v error -i "$input_file" "$output_file" -y; then
+        if [ "$DELETE_ORIGINAL" = true ]; then
+            rm "$input_file"
+            echo "Deleted original: '$input_file'"
+        fi
+    else
+        echo "Error: Failed to convert '$input_file'" >&2
+    fi
+}
+
+# Main Execution Flow
+if [ -f "$TARGET" ]; then
+    # Handle single file processing (matches .jpg, .jpeg case-insensitively)
+    if [[ "$TARGET" =~ \.[jJ][pP][eE]?[gG]$ ]]; then
+        convert_file "$TARGET"
+    else
+        echo "Error: '$TARGET' does not appear to be a JPEG/JPG file." >&2
+        exit 1
+    fi
+
+elif [ -d "$TARGET" ]; then
+    # Handle directory processing
+    shopt -s nullglob globstar
+    
+    # Find all variations of jpeg/jpg extensions
+    jpeg_files=("$TARGET"/**/*.jpg "$TARGET"/**/*.JPG "$TARGET"/**/*.jpeg "$TARGET"/**/*.JPEG)
+    
+    if [ ${#jpeg_files[@]} -eq 0 ]; then
+        echo "No JPEG/JPG files found in directory: '$TARGET'"
+        exit 0
+    fi
+
+    echo "Found ${#jpeg_files[@]} JPEG/JPG file(s) to process..."
+    for file in "${jpeg_files[@]}"; do
+        if [ -f "$file" ]; then
+            convert_file "$file"
+        fi
+    done
+else
+    echo "Error: '$TARGET' is not a valid file or directory." >&2
+    exit 1
+fi
+
+echo "Done!"
