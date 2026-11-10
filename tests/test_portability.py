@@ -1,5 +1,7 @@
 """Portable smoke tests for the platform-independent command scripts."""
 
+import contextlib
+import io
 import importlib.machinery
 import importlib.util
 import os
@@ -48,7 +50,9 @@ class PortabilityTests(unittest.TestCase):
             with (mock.patch("pathlib.Path.cwd", return_value=folder),
                   mock.patch.object(igc2gpx.shutil, "which", return_value="gpsbabel"),
                   mock.patch.object(igc2gpx.subprocess, "run", side_effect=fake_run),
-                  mock.patch.object(sys, "argv", ["yuleshow-igc2gpx"])):
+                  mock.patch.object(sys, "argv", ["yuleshow-igc2gpx"]),
+                  contextlib.redirect_stdout(io.StringIO()),
+                  contextlib.redirect_stderr(io.StringIO())):
                 self.assertEqual(igc2gpx.main(), 0)
 
             self.assertEqual(len(calls), 2)
@@ -67,14 +71,32 @@ class PortabilityTests(unittest.TestCase):
             source.write_text("new", encoding="ascii")
             destination.write_text("original", encoding="ascii")
             if os.name == "nt":
-                with self.assertRaises(FileExistsError):
-                    igc2gpx.publish_without_overwrite(source, destination)
+                self.assertFalse(igc2gpx.publish_without_overwrite(source, destination))
+                self.assertTrue(source.exists())
             else:
                 with mock.patch.object(igc2gpx.subprocess, "run") as run:
                     run.return_value = subprocess.CompletedProcess([], 0)
                     self.assertFalse(igc2gpx.publish_without_overwrite(source, destination))
                     run.assert_called_once_with(
                         ["mv", "-n", str(source), str(destination)], check=False)
+            self.assertEqual(destination.read_text(encoding="ascii"), "original")
+
+    def test_native_windows_rename_does_not_overwrite(self):
+        if os.name != "nt":
+            return
+        loader = importlib.machinery.SourceFileLoader(
+            "fixgpx", str(SCRIPTS / "yuleshow-fixgpx"))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        fixgpx = importlib.util.module_from_spec(spec)
+        loader.exec_module(fixgpx)
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            source = folder / "temporary.gpx"
+            destination = folder / "trip.gpx"
+            source.write_text("new", encoding="ascii")
+            destination.write_text("original", encoding="ascii")
+            self.assertFalse(fixgpx.rename_without_overwrite(source, destination))
+            self.assertTrue(source.exists())
             self.assertEqual(destination.read_text(encoding="ascii"), "original")
 
     def test_rename_tools_handle_collisions(self):
@@ -88,6 +110,8 @@ class PortabilityTests(unittest.TestCase):
                 result = subprocess.run(
                     [sys.executable, str(SCRIPTS / script)], cwd=folder,
                     capture_output=True, text=True, check=False,
+                    encoding="utf-8",
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 )
                 self.assertEqual(result.returncode, 0)
                 self.assertEqual((folder / source_name).read_text(encoding="ascii"), "source")

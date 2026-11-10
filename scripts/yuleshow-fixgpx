@@ -6,6 +6,7 @@ Missing or repeated track container end tags are repaired; incomplete points are
 """
 
 import argparse
+import ctypes
 import math
 import os
 import stat
@@ -158,6 +159,18 @@ def replace_contents(path, data):
             temporary.unlink()
 
 
+def rename_without_overwrite(source, destination):
+    move_file = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileW
+    move_file.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p)
+    move_file.restype = ctypes.c_int
+    if move_file(str(source), str(destination)):
+        return True
+    error = ctypes.get_last_error()
+    if error in (80, 183):
+        return False
+    raise OSError(error, ctypes.FormatError(error), str(destination))
+
+
 def local_filename(root):
     namespace = root.tag[:-3]
     timestamps = []
@@ -205,7 +218,9 @@ def process(path, dry_run):
         else:
             try:
                 if os.name == "nt":
-                    path.rename(destination)
+                    if not rename_without_overwrite(path, destination):
+                        print(f"Skipped rename (destination appeared): {path}")
+                        return
                 else:
                     subprocess.run(["mv", "-n", str(path), str(destination)], check=True)
             except FileExistsError:

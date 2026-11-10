@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Convert IGC files in the current directory to same-name GPX files."""
 
+import ctypes
 import os
 import shutil
 import subprocess
@@ -11,11 +12,15 @@ from pathlib import Path
 
 def publish_without_overwrite(source: Path, destination: Path) -> bool:
     if os.name == "nt":
-        try:
-            source.rename(destination)
+        move_file = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileW
+        move_file.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p)
+        move_file.restype = ctypes.c_int
+        if move_file(str(source), str(destination)):
             return True
-        except FileExistsError:
+        error = ctypes.get_last_error()
+        if error in (80, 183):
             return False
+        raise OSError(error, ctypes.FormatError(error), str(destination))
     result = subprocess.run(["mv", "-n", str(source), str(destination)], check=False)
     if result.returncode:
         raise OSError(f"Could not create {destination}")

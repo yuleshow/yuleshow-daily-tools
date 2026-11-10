@@ -123,7 +123,9 @@ foreach ($Script in Get-ChildItem -LiteralPath $ScriptsDir -File) {
     $Target = Join-Path $BinDir ($Script.Name + ".cmd")
     $Content = @"
 @echo off
+setlocal
 $Marker
+set "PYTHONIOENCODING=utf-8"
     "%YULESHOW_DAILY_TOOLS_PYTHON%" "%YULESHOW_DAILY_TOOLS_SCRIPTS%\$($Script.Name)" %*
 exit /b %errorlevel%
 "@
