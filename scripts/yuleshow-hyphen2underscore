@@ -1,39 +1,29 @@
-#!/usr/bin/env bash
-# yuleshow-hyphen2underscore: rename files in CWD, replacing "-" with "_".
-# Usage: yuleshow-hyphen2underscore
+#!/usr/bin/env python3
+"""Replace hyphens with underscores in names in the current directory."""
 
-set -euo pipefail
+import os
+import sys
+from pathlib import Path
 
-log()  { printf '🚀 %s\n' "$*"; }
-ok()   { printf '✅ %s\n' "$*"; }
-warn() { printf '⚠️  %s\n' "$*" >&2; }
 
-log "Replacing '-' with '_' in filenames under: $PWD"
+def main() -> int:
+    print(f"🚀 Replacing hyphens with underscores under: {Path.cwd()}")
+    failed = False
+    for source in sorted(Path.cwd().iterdir()):
+        if "-" not in source.name:
+            continue
+        target = source.with_name(source.name.replace("-", "_"))
+        if os.path.lexists(target):
+            print(f"⚠️ Skip '{source}' (target '{target}' exists)", file=sys.stderr)
+            continue
+        try:
+            source.rename(target)
+            print(f"✅ {source.name} -> {target.name}")
+        except OSError as error:
+            print(f"❌ {source}: {error}", file=sys.stderr)
+            failed = True
+    return int(failed)
 
-shopt -s nullglob
-for f in *; do
-    new="${f//-/_}"
-    [ "$new" = "$f" ] && continue
-    if [ -e "$new" ]; then
-        warn "Skip '$f' (target '$new' exists)"
-    else
-        mv -- "$f" "$new"
-        ok "$f -> $new"
-    fi
-done
-#!/bin/bash
 
-for f in *
-do
-  new="${f//-/_}"
-  if [ "$new" != "$f" ]
-  then
-    if [ -e "$new" ]
-    then
-      echo not renaming \""$f"\" because \""$new"\" already exists
-    else
-      echo moving "$f" to "$new"
-    mv "$f" "$new"
-  fi
-fi
-done
+if __name__ == "__main__":
+    sys.exit(main())

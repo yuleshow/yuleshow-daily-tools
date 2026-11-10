@@ -13,6 +13,7 @@ Behavior:
 import glob
 import os
 import random
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -47,14 +48,19 @@ def move_photo(my_photo: str) -> None:
         new_model = my_image.model.replace(" ", "-")
     except AttributeError:
         new_model = "NONE"
+    if os.name == "nt":
+        new_make = re.sub(r'[<>:"/\\|?*]', "-", new_make)
+        new_model = re.sub(r'[<>:"/\\|?*]', "-", new_model)
 
     new_name = f"{new_date}_{new_time}-{new_make}-{new_model}"
     new_jpg = f"{new_name}.JPG"
-    for i in range(1, 5):
-        if path.exists(new_jpg):
-            new_jpg = f"{new_name}-{i}.JPG"
-        else:
-            break
+    if path.lexists(new_jpg) and path.samefile(my_photo, new_jpg):
+        ok(f"{my_photo} already has the desired name")
+        return
+    counter = 1
+    while path.lexists(new_jpg):
+        new_jpg = f"{new_name}-{counter}.JPG"
+        counter += 1
 
     os.rename(my_photo, new_jpg)
     ok(f"{my_photo} -> {new_jpg}")
@@ -66,7 +72,14 @@ def main() -> int:
     # Flatten first-level subdirs into CWD
     for source_dir in glob.glob("*/"):
         for name in os.listdir(source_dir):
-            shutil.move(os.path.join(source_dir, name), "./")
+            source = os.path.join(source_dir, name)
+            target = name
+            stem, ext = os.path.splitext(name)
+            counter = 1
+            while path.lexists(target):
+                target = f"{stem}-{counter}{ext}"
+                counter += 1
+            shutil.move(source, target)
         try:
             os.rmdir(source_dir)
         except OSError as e:
@@ -81,8 +94,11 @@ def main() -> int:
             os.remove(file)
             ok(f"removed {file}")
         else:
-            now = datetime.now()
-            new_name = f"{now.strftime('%Y%m%d_%H%M%S')}-{random.randint(1000, 9999)}.{ext}"
+            while True:
+                now = datetime.now()
+                new_name = f"{now.strftime('%Y%m%d_%H%M%S')}-{random.randint(1000, 9999)}.{ext}"
+                if not path.lexists(new_name):
+                    break
             os.rename(file, new_name)
             ok(f"{file} -> {new_name}")
 

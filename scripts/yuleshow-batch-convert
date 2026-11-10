@@ -1,35 +1,43 @@
-#!/usr/bin/env bash
-# yuleshow-batch-convert: batch-convert media files by extension via ffmpeg.
-# Usage: yuleshow-batch-convert <old_ext> <new_ext>
-# Example: yuleshow-batch-convert wav mp3
+#!/usr/bin/env python3
+"""Batch-convert files in the current directory with ffmpeg."""
 
-set -euo pipefail
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-log()  { printf '🚀 %s\n' "$*"; }
-ok()   { printf '✅ %s\n' "$*"; }
-err()  { printf '❌ %s\n' "$*" >&2; }
 
-if [ "$#" -ne 2 ]; then
-    err "Usage: yuleshow-batch-convert <old_ext> <new_ext>"
-    exit 1
-fi
+def main() -> int:
+    if len(sys.argv) != 3:
+        print("Usage: yuleshow-batch-convert <old_ext> <new_ext>", file=sys.stderr)
+        return 1
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        print("ffmpeg not found", file=sys.stderr)
+        return 1
 
-command -v ffmpeg >/dev/null 2>&1 || { err "ffmpeg not found"; exit 1; }
+    old_ext, new_ext = (value.lstrip(".") for value in sys.argv[1:])
+    if not old_ext or not new_ext:
+        print("Extensions must not be empty.", file=sys.stderr)
+        return 1
 
-old_ext="$1"
-new_ext="$2"
+    inputs = sorted(path for path in Path.cwd().iterdir()
+                    if path.is_file() and path.suffix[1:].casefold() == old_ext.casefold())
+    print(f"🚀 Converting *.{old_ext} -> *.{new_ext} in: {Path.cwd()}")
+    failed = False
+    for source in inputs:
+        target = source.with_suffix(f".{new_ext}")
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-n", "-i", str(source), str(target)],
+            check=False,
+        )
+        if result.returncode:
+            print(f"❌ Failed: {source}", file=sys.stderr)
+            failed = True
+        else:
+            print(f"✅ {source} -> {target}")
+    return int(failed)
 
-log "Converting *.$old_ext -> *.$new_ext in: $PWD"
 
-shopt -s nullglob nocaseglob
-for i in *."$old_ext"; do
-    out="${i%.*}.$new_ext"
-    ffmpeg -hide_banner -loglevel error -i "$i" "$out"
-    ok "$i -> $out"
-done
-old_extension=$1
-new_extension=$2
-
-for i in *."$old_extension";
-  do ffmpeg -i "$i" "${i%.*}.$new_extension";
-done
+if __name__ == "__main__":
+    sys.exit(main())

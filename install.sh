@@ -90,11 +90,15 @@ install_system_macos() {
     fi
     log "Installing system packages via Homebrew"
     brew install --quiet \
-        python@3.13 \
+        python \
         ffmpeg \
+        gpsbabel \
         exiftool \
         poppler \
-        exiv2 || warn "Some brew packages may already be installed."
+        exiv2 \
+        libheif \
+        imagemagick \
+        mysql-client || warn "Some brew packages may already be installed."
 }
 
 install_system_linux() {
@@ -115,32 +119,35 @@ install_system_linux() {
             python3 python3-venv python3-pip python3-dev \
             build-essential \
             ffmpeg \
+            gpsbabel \
             libimage-exiftool-perl \
             poppler-utils \
             libexiv2-dev libboost-python-dev \
-            libheif-examples imagemagick
+            libheif-examples imagemagick default-mysql-client
     elif command -v dnf >/dev/null 2>&1; then
         log "Installing system packages via dnf"
         $SUDO dnf install -y \
             python3 python3-virtualenv python3-pip python3-devel \
             gcc gcc-c++ make \
             ffmpeg \
+            gpsbabel \
             perl-Image-ExifTool \
             poppler-utils \
             exiv2-devel boost-python3-devel \
-            libheif ImageMagick
+            libheif ImageMagick mariadb
     elif command -v pacman >/dev/null 2>&1; then
         log "Installing system packages via pacman"
         $SUDO pacman -S --needed --noconfirm \
             python python-pip \
             base-devel \
             ffmpeg \
+            gpsbabel \
             perl-image-exiftool \
             poppler \
             exiv2 boost \
-            libheif imagemagick
+            libheif imagemagick mariadb-clients
     else
-        warn "Unsupported Linux distro. Install manually: ffmpeg exiftool poppler exiv2 python3 libheif imagemagick"
+        warn "Unsupported Linux distro. Install manually: ffmpeg gpsbabel exiftool poppler exiv2 python3 libheif imagemagick"
     fi
 }
 
@@ -148,22 +155,13 @@ install_system_linux() {
 setup_venv() {
     log "Creating Python virtualenv at $VENV_DIR"
     mkdir -p "$APP_DIR"
-    if [ ! -x "$VENV_DIR/bin/python3" ]; then
+    if [ ! -x "$VENV_DIR/bin/python" ]; then
         python3 -m venv "$VENV_DIR"
     fi
-    "$VENV_DIR/bin/pip" install --upgrade pip wheel setuptools >/dev/null
+    "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel setuptools
 
     log "Installing Python packages"
-    "$VENV_DIR/bin/pip" install \
-        Pillow \
-        pillow-avif-plugin \
-        pillow-heif \
-        pyexiv2 \
-        lunarcalendar \
-        pdf2image \
-        exif \
-        exifread \
-        opencc-python-reimplemented
+    "$VENV_DIR/bin/python" -m pip install -r "$REPO_DIR/requirements.txt"
 }
 
 # ---------- Wrappers ----------
@@ -177,20 +175,11 @@ install_wrappers() {
         target_name="${name%.sh}"
         target="$BIN_DIR/$target_name"
 
-        first_line="$(head -n1 "$src" || true)"
-        if [[ "$first_line" == *python* ]]; then
-            cat > "$target" <<EOF
+        cat > "$target" <<EOF
 #!/usr/bin/env bash
-# yuleshow-daily-tools wrapper (python)
-exec "$VENV_DIR/bin/python3" "$src" "\$@"
+# yuleshow-daily-tools wrapper
+exec "$VENV_DIR/bin/python" "$src" "\$@"
 EOF
-        else
-            cat > "$target" <<EOF
-#!/usr/bin/env bash
-# yuleshow-daily-tools wrapper (shell)
-exec bash "$src" "\$@"
-EOF
-        fi
         chmod +x "$target"
         chmod +x "$src" 2>/dev/null || true
         echo "  installed $target_name"
@@ -273,11 +262,6 @@ post_install_notes() {
 
     setup_path
 
-    if [ "$OS" = "linux" ]; then
-        echo
-        warn "macOS-only commands will no-op on Linux:"
-        echo "    - yuleshow-clean  (uses macOS 'dot_clean', 'defaults', 'purge')"
-    fi
 }
 
 # ---------- Main ----------
@@ -302,6 +286,9 @@ main() {
     else
         log "Skipping system package installation (--no-system)"
     fi
+
+    python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' ||
+        die "Python 3.9 or newer is required."
 
     setup_venv
     install_wrappers

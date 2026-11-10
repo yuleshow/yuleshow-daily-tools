@@ -28,7 +28,10 @@ ALL_EXTS = IMAGE_EXTS + RAW_EXTS
 
 
 def clean(text: str) -> str:
-    return re.sub(r"\s+", "-", text.strip())
+    text = re.sub(r"\s+", "-", text.strip())
+    if os.name == "nt":
+        text = re.sub(r'[<>:"/\\|?*]', "-", text)
+    return text
 
 
 def get_exif_jpeg(path: str) -> dict:
@@ -109,11 +112,25 @@ def main() -> int:
 
         base = format_name(dt, make, model, ext)
         count = seen.get(base, 0)
-        new_name = format_name(dt, make, model, ext, count if count > 0 else None)
+        already_named = False
+        while True:
+            new_name = format_name(dt, make, model, ext, count if count > 0 else None)
+            if not os.path.lexists(new_name):
+                break
+            try:
+                if os.path.samefile(fn, new_name):
+                    already_named = True
+                    break
+            except OSError:
+                pass
+            count += 1
         seen[base] = count + 1
 
-        os.rename(fn, new_name)
-        ok(f"{fn} -> {new_name}")
+        if not already_named:
+            os.rename(fn, new_name)
+            ok(f"{fn} -> {new_name}")
+        else:
+            ok(f"{fn} already has the desired name")
     return 0
 
 

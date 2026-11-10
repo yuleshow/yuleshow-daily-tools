@@ -1,0 +1,10 @@
+Pillow
+pillow-avif-plugin
+pillow-heif
+pyexiv2
+lunarcalendar
+pdf2image
+exif
+exifread
+opencc-python-reimplemented
+tzdata

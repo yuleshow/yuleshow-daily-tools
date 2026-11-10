@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Convert IGC files in the current directory to same-name GPX files."""
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def publish_without_overwrite(source: Path, destination: Path) -> bool:
+    if os.name == "nt":
+        try:
+            source.rename(destination)
+            return True
+        except FileExistsError:
+            return False
+    result = subprocess.run(["mv", "-n", str(source), str(destination)], check=False)
+    if result.returncode:
+        raise OSError(f"Could not create {destination}")
+    return not os.path.lexists(source)
+
+
+def main() -> int:
+    if len(sys.argv) != 1:
+        print("Usage: yuleshow-igc2gpx", file=sys.stderr)
+        return 1
+    inputs = sorted(path for path in Path.cwd().iterdir()
+                    if path.is_file() and path.suffix.casefold() == ".igc")
+    print(f"🚀 Converting IGC -> GPX in: {Path.cwd()}")
+    if not inputs:
+        print("No IGC files found.")
+        return 0
+    gpsbabel = shutil.which("gpsbabel")
+    if not gpsbabel:
+        print("gpsbabel not found. Install GPSBabel or re-run the installer.", file=sys.stderr)
+        return 1
+
+    failed = False
+    for source in inputs:
+        destination = source.with_suffix(".gpx")
+        if os.path.lexists(destination):
+            print(f"⚠️ Skipping {source}: same-name GPX already exists")
+            continue
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    prefix=".yuleshow-igc2gpx-", suffix=".gpx",
+                    dir=source.parent, delete=False) as output:
+                temporary = Path(output.name)
+            result = subprocess.run(
+                [gpsbabel, "-i", "igc", "-f", str(source), "-o", "gpx", "-F", str(temporary)],
+                check=False,
+            )
+            if result.returncode:
+                print(f"❌ Failed to convert {source}", file=sys.stderr)
+                failed = True
+                continue
+            if publish_without_overwrite(temporary, destination):
+                print(f"✅ {source} -> {destination}")
+            else:
+                print(f"⚠️ Skipping {source}: {destination} appeared during conversion")
+        except OSError as error:
+            print(f"❌ {error}", file=sys.stderr)
+            failed = True
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

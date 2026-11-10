@@ -1,60 +1,70 @@
-#!/bin/bash
+#!/usr/bin/env python3
+"""Create smaller H.265 MP4 copies of supported videos using ffmpeg."""
 
-# Configuration
-TARGET_DIR="."
-LOG_FILE="yuleshow_conversion.log"
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
 
-echo "------------------------------------------------"
-echo "Starting smart recursive conversion (H.265)"
-echo "Logging to: $LOG_FILE"
-echo "------------------------------------------------"
 
-echo "--- Conversion Started: $(date) ---" >> "$LOG_FILE"
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".m4v"}
 
-find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.m4v" \) \
-    ! -name "*-echoshow.mp4" -print0 | while IFS= read -r -d '' FILE; do
 
-    FILENAME="${FILE%.*}"
-    OUTPUT_PATH="./${FILENAME}-echoshow.mp4"
+def main() -> int:
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        print("ffmpeg and ffprobe are required and must be on PATH.", file=sys.stderr)
+        return 1
 
-    # 1. Skip if already converted
-    if [ -f "$OUTPUT_PATH" ]; then
-        echo "SKIPPED: $FILE (Output exists)" >> "$LOG_FILE"
-        continue
-    fi
+    root = Path.cwd()
+    log_path = root / "yuleshow_conversion.log"
+    failed = False
+    with log_path.open("a", encoding="utf-8") as log:
+        def report(message: str) -> None:
+            print(message)
+            log.write(message + "\n")
 
-    # 2. Check Resolution
-    # ffprobe pulls the height of the first video stream
-    HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "$FILE")
+        log.write(f"--- Conversion Started: {datetime.now().isoformat()} ---\n")
+        for source in sorted(path for path in root.rglob("*")
+                             if path.is_file() and path.suffix.casefold() in VIDEO_EXTENSIONS
+                             and not path.stem.casefold().endswith("-echoshow")):
+            target = source.with_name(f"{source.stem}-echoshow.mp4")
+            if target.exists():
+                log.write(f"SKIPPED: {source} (Output exists)\n")
+                continue
+            probe = subprocess.run(
+                [ffprobe, "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=height", "-of", "csv=s=x:p=0", str(source)],
+                capture_output=True, text=True, check=False,
+            )
+            try:
+                height = int(probe.stdout.strip())
+            except ValueError:
+                height = 0
+            if probe.returncode or height < 720:
+                report(f"SKIPPED: {source} (Resolution {height or 'unknown'}p is below 720p)")
+                continue
 
-    if [ -z "$HEIGHT" ] || [ "$HEIGHT" -lt 720 ]; then
-        echo "SKIPPED: $FILE (Resolution ${HEIGHT:-unknown}p is below 720p)" | tee -a "$LOG_FILE"
-        continue
-    fi
+            report(f"PROCESSING: {source} ({height}p)")
+            command = [
+                ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-stats",
+                "-n", "-i", str(source), "-c:v", "libx265", "-b:v", "1200k",
+                "-fpsmax", "30", "-pix_fmt", "yuv420p",
+                "-vf", "scale='min(1280,iw)':-2", "-c:a", "aac", "-b:a", "128k",
+                "-ac", "2", "-movflags", "+faststart", str(target),
+            ]
+            result = subprocess.run(command, check=False)
+            if result.returncode:
+                target.unlink(missing_ok=True)
+                report(f"FAILED: {source}")
+                failed = True
+            else:
+                report(f"SUCCESS: {source} -> {target}")
+        log.write(f"--- Batch Complete: {datetime.now().isoformat()} ---\n")
+    return int(failed)
 
-    echo "PROCESSING: $FILE (${HEIGHT}p)" | tee -a "$LOG_FILE"
 
-    # 3. Encode using M1 Hardware
-    ffmpeg -nostdin -hide_banner -loglevel error -stats \
-      -i "$FILE" \
-      -c:v hevc_videotoolbox \
-      -b:v 1200k \
-      -fpsmax 30 \
-      -pix_fmt yuv420p \
-      -vf "scale='min(1280,iw)':-2" \
-      -c:a aac -b:a 128k -ac 2 \
-      -movflags +faststart \
-      -y "$OUTPUT_PATH"
-
-    if [ $? -eq 0 ]; then
-        OLD_SIZE=$(du -h "$FILE" | cut -f1)
-        NEW_SIZE=$(du -h "$OUTPUT_PATH" | cut -f1)
-        echo "SUCCESS: $FILE [$OLD_SIZE -> $NEW_SIZE]" | tee -a "$LOG_FILE"
-    else
-        echo "FAILED: $FILE" | tee -a "$LOG_FILE"
-        # Remove partial file on failure
-        [ -f "$OUTPUT_PATH" ] && rm "$OUTPUT_PATH"
-    fi
-done
-
-echo "--- Batch Complete: $(date) ---" >> "$LOG_FILE"
+if __name__ == "__main__":
+    sys.exit(main())

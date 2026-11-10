@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Repair GPX files recursively, back up home/empty logs, and name trips in LA time.
+
+Usage: yuleshow-fixgpx [--dry-run]
+Missing or repeated track container end tags are repaired; incomplete points are not guessed.
+"""
+
+import argparse
+import math
+import os
+import stat
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from pathlib import Path
+from xml.parsers import expat
+from zoneinfo import ZoneInfo
+
+
+HOME_LATITUDE = 34.1539223
+HOME_LONGITUDE = -118.1082890
+HOME_RADIUS_METRES = 75
+STARTUP_RADIUS_METRES = 100
+STARTUP_SECONDS = 60
+
+
+def reject_doctype(*args):
+    raise ValueError("DOCTYPE declarations are not supported")
+
+
+def close_gpx(data):
+    data.decode("utf-8")
+    while True:
+        stack = []
+        endings = []
+        parser = expat.ParserCreate()
+
+        def start_element(name, attrs):
+            stack.append(name)
+            endings.clear()
+
+        def end_element(name):
+            stack.pop()
+            endings.append((name, parser.CurrentByteIndex))
+            del endings[:-3]
+
+        parser.StartElementHandler = start_element
+        parser.EndElementHandler = end_element
+        parser.StartDoctypeDeclHandler = reject_doctype
+        try:
+            parser.Parse(data, False)
+            break
+        except expat.ExpatError as error:
+            if (stack or error.code not in (
+                    expat.errors.codes[expat.errors.XML_ERROR_JUNK_AFTER_DOC_ELEMENT],
+                    expat.errors.codes[expat.errors.XML_ERROR_INVALID_TOKEN])
+                    or [name.split(":")[-1] for name, _ in endings]
+                    != ["trkseg", "trk", "gpx"]):
+                raise
+            closing_start = endings[0][1]
+            closing_end = data.index(b">", endings[-1][1]) + 1
+            closing_tags = [f"</{name}>".encode() for name, _ in endings]
+            if b"".join(data[closing_start:closing_end].split()) != b"".join(closing_tags):
+                raise
+            continuation = data[closing_end:].lstrip()
+            point_start = f"<{endings[0][0][:-6]}trkpt".encode()
+            if not (continuation.startswith(closing_tags[0])
+                    or (continuation.startswith(point_start)
+                        and continuation[len(point_start):len(point_start) + 1]
+                        in (b" ", b"\t", b"\r", b"\n", b">", b"/"))):
+                raise
+            data = data[:closing_start] + data[closing_end:]
+    try:
+        parser.Parse(b"", True)
+    except expat.ExpatError as error:
+        containers = [name.split(":")[-1] for name in stack]
+        allowed = (["gpx"], ["gpx", "trk"], ["gpx", "trk", "trkseg"],
+                   ["gpx", "rte"])
+        if (error.code != expat.errors.codes[expat.errors.XML_ERROR_NO_ELEMENTS]
+                or containers not in allowed):
+            raise ValueError("not just missing GPX container end tags") from error
+        ending = "\n" + "\n".join(f"</{name}>" for name in reversed(stack)) + "\n"
+        data += ending.encode("utf-8")
+    root = ET.fromstring(data)
+    if root.tag not in ("gpx", "{http://www.topografix.com/GPX/1/1}gpx",
+                        "{http://www.topografix.com/GPX/1/0}gpx"):
+        raise ValueError("not a supported GPX document")
+    return data, root
+
+
+def distance_from_home(point):
+    latitude = float(point.attrib["lat"])
+    longitude = float(point.attrib["lon"])
+    if not (math.isfinite(latitude) and math.isfinite(longitude)
+            and -90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise ValueError("invalid coordinates")
+    latitude_delta = math.radians(latitude - HOME_LATITUDE)
+    longitude_delta = math.radians(longitude - HOME_LONGITUDE)
+    value = (math.sin(latitude_delta / 2) ** 2
+             + math.cos(math.radians(HOME_LATITUDE))
+             * math.cos(math.radians(latitude)) * math.sin(longitude_delta / 2) ** 2)
+    return 6371008.8 * 2 * math.asin(math.sqrt(min(1.0, value)))
+
+
+def is_empty(root):
+    namespace = root.tag[:-3]
+    point_tags = {f"{namespace}{name}" for name in ("trkpt", "rtept", "wpt")}
+    return not any(element.tag in point_tags for element in root.iter())
+
+
+def is_home_only(root):
+    namespace = root.tag[:-3]
+    points = list(root.findall(f"{namespace}wpt"))
+    points += list(root.findall(f"{namespace}rte/{namespace}rtept"))
+    points += list(root.findall(f"{namespace}trk/{namespace}trkseg/{namespace}trkpt"))
+    if not points:
+        return False
+    try:
+        distances = [distance_from_home(point) for point in points]
+    except (KeyError, ValueError):
+        return False
+    if all(distance <= HOME_RADIUS_METRES for distance in distances):
+        return True
+    if (any(point.tag != f"{namespace}trkpt" for point in points)
+            or any(distance > STARTUP_RADIUS_METRES for distance in distances)):
+        return False
+    try:
+        times = [datetime.fromisoformat(
+            point.findtext(f"{namespace}time", "").replace("Z", "+00:00"))
+            for point in points]
+        if (any(time.utcoffset() is None for time in times)
+                or any(later <= earlier for earlier, later in zip(times, times[1:]))):
+            return False
+        elapsed = [(time - times[0]).total_seconds() for time in times]
+    except (ValueError, TypeError):
+        return False
+    settled = [seconds for seconds in elapsed if seconds >= STARTUP_SECONDS]
+    return (len(settled) >= 2 and settled[-1] - settled[0] >= STARTUP_SECONDS
+            and all(distance <= HOME_RADIUS_METRES or seconds < STARTUP_SECONDS
+                    for distance, seconds in zip(distances, elapsed)))
+
+
+def replace_contents(path, data):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".yuleshow-fixgpx-", dir=path.parent,
+                                         delete=False) as output:
+            temporary = Path(output.name)
+            output.write(data)
+            output.flush()
+            if hasattr(os, "fchmod"):
+                os.fchmod(output.fileno(), stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def local_filename(root):
+    namespace = root.tag[:-3]
+    timestamps = []
+    for point_path in ("trk/trkseg/trkpt", "rte/rtept", "wpt"):
+        qualified = "/".join(namespace + part for part in point_path.split("/"))
+        timestamps.extend(point.findtext(f"{namespace}time", "")
+                          for point in root.findall(qualified))
+    timestamps.append(root.findtext(f"{namespace}metadata/{namespace}time", ""))
+    timestamps.append(root.findtext(f"{namespace}time", ""))
+    for timestamp in timestamps:
+        try:
+            recorded = datetime.fromisoformat(timestamp.strip().replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if recorded.utcoffset() is not None:
+            return recorded.astimezone(ZoneInfo("America/Los_Angeles")).strftime(
+                "%Y%m%d_%H%M-LA.gpx")
+    return None
+
+
+def process(path, dry_run):
+    original = path.read_bytes()
+    repaired, root = close_gpx(original)
+    should_backup = is_empty(root) or is_home_only(root)
+    if repaired != original:
+        if not dry_run:
+            replace_contents(path, repaired)
+        print(f"{'Would repair' if dry_run else 'Repaired'}: {path}")
+    if should_backup:
+        destination = path.with_suffix(".bak")
+    else:
+        filename = local_filename(root)
+        if filename is None:
+            print(f"Skipped rename (no timezone-aware timestamp): {path}")
+            return
+        destination = path.with_name(filename)
+    if destination == path:
+        if repaired == original:
+            print(f"Kept: {path}")
+    elif os.path.lexists(destination):
+        print(f"Skipped rename (destination exists): {path} -> {destination}")
+    else:
+        if dry_run:
+            print(f"Would rename: {path} -> {destination}")
+        else:
+            try:
+                if os.name == "nt":
+                    path.rename(destination)
+                else:
+                    subprocess.run(["mv", "-n", str(path), str(destination)], check=True)
+            except FileExistsError:
+                print(f"Skipped rename (destination appeared): {path}")
+                return
+            if path.exists():
+                print(f"Skipped rename (destination appeared): {path}")
+            else:
+                print(f"Renamed: {path} -> {destination}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="report without changing files")
+    args = parser.parse_args()
+    failed = False
+    found = False
+
+    def walk_error(error):
+        nonlocal failed
+        failed = True
+        print(f"Error: {error}", file=sys.stderr)
+
+    for directory, folders, filenames in os.walk(Path.cwd(), onerror=walk_error):
+        folders.sort()
+        for filename in sorted(filenames):
+            path = Path(directory) / filename
+            if path.suffix.lower() != ".gpx" or path.is_symlink() or not path.is_file():
+                continue
+            found = True
+            try:
+                process(path, args.dry_run)
+            except (OSError, ValueError, expat.ExpatError, ET.ParseError,
+                    subprocess.CalledProcessError) as error:
+                failed = True
+                print(f"Error: {path}: {error}", file=sys.stderr)
+    if not found:
+        print("No GPX files found.")
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

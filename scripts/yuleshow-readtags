@@ -1,47 +1,49 @@
-#!/usr/bin/env bash
-# yuleshow-readtags: print IPTC Keywords and XMP Subject for images in a dir.
-# Usage: yuleshow-readtags [dir]
+#!/usr/bin/env python3
+"""Print IPTC Keywords and XMP Subject for images in a directory."""
 
-set -euo pipefail
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-log()  { printf '🚀 %s\n' "$*"; }
-err()  { printf '❌ %s\n' "$*" >&2; }
 
-command -v exiftool >/dev/null 2>&1 || { err "exiftool not found"; exit 1; }
+def main() -> int:
+    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    if len(sys.argv) > 2:
+        print("Usage: yuleshow-readtags [dir]", file=sys.stderr)
+        return 1
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        print("exiftool not found", file=sys.stderr)
+        return 1
+    if not target.is_dir():
+        print(f"Not a directory: {target}", file=sys.stderr)
+        return 1
 
-TARGET_DIR="${1:-.}"
-[ -d "$TARGET_DIR" ] || { err "Not a directory: $TARGET_DIR"; exit 1; }
+    print(f"🚀 Reading tags in: {target}")
+    failed = False
+    for image in sorted(path for path in target.rglob("*")
+                        if path.is_file() and path.suffix.casefold()
+                        in (".jpg", ".jpeg", ".png")):
+        result = subprocess.run(
+            [exiftool, "-s", "-XMP:Subject", "-IPTC:Keywords", str(image)],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode:
+            print(f"❌ {image}: {result.stderr.strip()}", file=sys.stderr)
+            failed = True
+            continue
+        values = {"Subject": [], "Keywords": []}
+        for line in result.stdout.splitlines():
+            label, separator, value = line.partition(":")
+            if separator and label.strip() in values and value.strip():
+                values[label.strip()].append(value.strip())
+        print(f"📷 {image}")
+        print(f"Subject  : {', '.join(values['Subject'])}")
+        print(f"Keywords : {', '.join(values['Keywords'])}")
+        print("---------------------------------------------")
+    return int(failed)
 
-log "Reading tags in: $TARGET_DIR"
 
-find "$TARGET_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | while read -r FILE; do
-    echo "📷 $FILE"
-
-    SUBJECT_LINE=$(exiftool -s -XMP:Subject   "$FILE" | grep '^Subject'  | sed 's/^Subject[ \t]*:[ \t]*//')
-    KEYWORDS_LINE=$(exiftool -s -IPTC:Keywords "$FILE" | grep '^Keywords' | sed 's/^Keywords[ \t]*:[ \t]*//')
-
-    SUBJECT=$(echo "$SUBJECT_LINE"   | sed 's/  */ /g' | sed 's/ /, /g')
-    KEYWORDS=$(echo "$KEYWORDS_LINE" | sed 's/  */ /g' | sed 's/ /, /g')
-
-    echo "Subject  : $SUBJECT"
-    echo "Keywords : $KEYWORDS"
-    echo "---------------------------------------------"
-done
-#!/bin/bash
-
-TARGET_DIR="${1:-.}"
-
-find "$TARGET_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | while read -r FILE; do
-    echo "📷 $FILE"
-
-    SUBJECT_LINE=$(exiftool -s -XMP:Subject "$FILE" | grep '^Subject' | sed 's/^Subject[ \t]*:[ \t]*//')
-    KEYWORDS_LINE=$(exiftool -s -IPTC:Keywords "$FILE" | grep '^Keywords' | sed 's/^Keywords[ \t]*:[ \t]*//')
-
-    # 把多空格轉成單空格，再把空格變成逗號
-    SUBJECT=$(echo "$SUBJECT_LINE" | sed 's/  */ /g' | sed 's/ /, /g')
-    KEYWORDS=$(echo "$KEYWORDS_LINE" | sed 's/  */ /g' | sed 's/ /, /g')
-
-    echo "Subject                         : $SUBJECT"
-    echo "Keywords                        : $KEYWORDS"
-    echo "---------------------------------------------"
-done
+if __name__ == "__main__":
+    sys.exit(main())

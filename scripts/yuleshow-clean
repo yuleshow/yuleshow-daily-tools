@@ -1,240 +1,166 @@
-#!/usr/bin/env bash
-# yuleshow-clean: macOS system and external-volume maintenance.
-# Usage:
-#   yuleshow-clean                    # run normal macOS maintenance
-#   yuleshow-clean /Volumes/SD4T      # clean one external volume
-#   yuleshow-clean --system /Volumes/SD4T
-#   yuleshow-clean --dry-run /Volumes/SD4T
-# Note: macOS-only (uses defaults, dot_clean, purge).
+#!/usr/bin/env python3
+"""Clean user caches and OS metadata from explicitly selected volumes."""
 
-set -euo pipefail
+import argparse
+import ctypes
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-log()  { printf '🚀 %s\n' "$*"; }
-ok()   { printf '✅ %s\n' "$*"; }
-warn() { printf '⚠️  %s\n' "$*" >&2; }
-err()  { printf '❌ %s\n' "$*" >&2; }
 
-usage() {
-    sed -n '2,8p' "$0" | sed 's/^# //'
-}
+MAC_VOLUME_DIRS = (".DocumentRevisions-V100", ".Spotlight-V100", ".TemporaryItems",
+                   ".Trashes", ".fseventsd")
 
-DRY_RUN=0
-RUN_SYSTEM=0
-TARGETS=()
 
-if [ "$#" -eq 0 ]; then
-    RUN_SYSTEM=1
-fi
+def remove(path: Path, dry_run: bool) -> None:
+    print(f"{'DRY-RUN: would remove' if dry_run else 'Removing'} {path}")
+    if dry_run:
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
 
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --system)
-            RUN_SYSTEM=1
-            shift
-            ;;
-        --dry-run)
-            DRY_RUN=1
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        --)
-            shift
-            while [ "$#" -gt 0 ]; do
-                TARGETS+=("$1")
-                shift
-            done
-            ;;
-        -*)
-            err "Unknown option: $1"
-            usage
-            exit 1
-            ;;
-        *)
-            TARGETS+=("$1")
-            shift
-            ;;
-    esac
-done
 
-if [ "$(uname -s)" != "Darwin" ]; then
-    warn "yuleshow-clean is macOS-only. Current OS: $(uname -s). Exiting."
-    exit 0
-fi
-
-run_cmd() {
-    if [ "$DRY_RUN" -eq 1 ]; then
-        printf 'DRY-RUN: '
-        printf '%q ' "$@"
-        printf '\n'
-    else
-        "$@"
-    fi
-}
-
-start_sudo_keepalive() {
-    if [ "$DRY_RUN" -eq 1 ]; then
+def run(command: list[str], dry_run: bool, **kwargs) -> int:
+    print(f"{'DRY-RUN: ' if dry_run else ''}{subprocess.list2cmdline(command)}")
+    if dry_run:
         return 0
-    fi
+    return subprocess.run(command, check=False, **kwargs).returncode
 
-    sudo -v
-    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
-}
 
-clean_system() {
-    log "Starting system maintenance for 梅璽閣主..."
-    start_sudo_keepalive
+def volume_root(path: Path) -> bool:
+    if sys.platform == "darwin":
+        return path.parent == Path("/Volumes") and path != Path("/Volumes")
+    if os.name == "nt":
+        get_volume_path = ctypes.windll.kernel32.GetVolumePathNameW
+        buffer = ctypes.create_unicode_buffer(32768)
+        if not get_volume_path(str(path.resolve()), buffer, len(buffer)):
+            return False
+        root = Path(buffer.value)
+        return path.resolve() == root
+    return path != Path("/") and os.path.ismount(path)
 
-    log "Enabling USB/Network dot-file protection..."
-    run_cmd defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
-    run_cmd defaults write com.apple.desktopservices DSDontWriteUSBStores -bool true
 
-    if command -v brew >/dev/null 2>&1; then
-        log "Cleaning up Homebrew..."
-        export HOMEBREW_NO_AUTO_UPDATE=1
-        run_cmd brew cleanup -s
-    else
-        warn "Homebrew not found, skipping."
-    fi
+def clean_volume(target: Path, dry_run: bool) -> bool:
+    if not target.is_dir():
+        print(f"⚠️ Not a directory, skipping: {target}", file=sys.stderr)
+        return False
+    if not volume_root(target):
+        print(f"⚠️ Not a mounted volume root, skipping: {target}", file=sys.stderr)
+        return False
 
-    log "Purging inactive RAM..."
-    run_cmd sudo purge
-
-    log "Cleaning Adobe Premiere Pro cache..."
-    ADOBE_COMMON="$HOME/Library/Application Support/Adobe/Common"
-    if [ -d "$ADOBE_COMMON" ]; then
-        run_cmd rm -rf "$ADOBE_COMMON/Media Cache/"* \
-                       "$ADOBE_COMMON/Media Cache Files/"* \
-                       "$ADOBE_COMMON/Peak Files/"* \
-                       "$ADOBE_COMMON/PTX/"*
-    fi
-
-    log "Merging AppleDouble files in project directories..."
-    [ -d "$HOME/yuleshow-github" ] && run_cmd dot_clean -m "$HOME/yuleshow-github"
-    [ -d "$HOME/Pictures" ] && run_cmd dot_clean -m "$HOME/Pictures"
-
-    log "Cleaning local .DS_Store files..."
-    for dir in Desktop Downloads Documents Pictures; do
-        [ -d "$HOME/$dir" ] && run_cmd find "$HOME/$dir" -name .DS_Store -type f -depth -exec rm -f {} +
-    done
-
-    log "Clearing user caches (protecting Homebrew)..."
-    if [ -d "$HOME/Library/Caches" ]; then
-        run_cmd find "$HOME/Library/Caches" -mindepth 1 -maxdepth 1 ! -name Homebrew -exec rm -rf {} +
-    fi
-}
-
-clean_volume() {
-    local target="$1"
-    local service_dir
-
-    if [ ! -d "$target" ]; then
-        warn "Not a directory, skipping: $target"
-        return 0
-    fi
-
-    case "$target" in
-        /Volumes/*) ;;
-        *)
-            warn "Skipping non-volume path: $target"
-            warn "Pass an external volume such as /Volumes/SD4T."
-            return 0
-            ;;
-    esac
-
-    if [ "$target" = "/Volumes" ]; then
-        warn "Refusing to clean /Volumes itself. Pass a mounted volume under it."
-        return 0
-    fi
-
-    log "Cleaning external volume: $target"
-
-    if command -v dot_clean >/dev/null 2>&1; then
-        log "Merging AppleDouble metadata..."
-        run_cmd dot_clean -m "$target"
-    else
-        warn "dot_clean not found, skipping AppleDouble merge."
-    fi
-
-    log "Removing .DS_Store files..."
-    run_cmd find "$target" -name .DS_Store -type f -depth -exec rm -f {} +
-
-    log "Removing remaining AppleDouble files..."
-    run_cmd find "$target" -name '._*' -type f -depth -exec rm -f {} +
-
-    log "Removing top-level macOS service folders..."
-    for service_dir in \
-        .DocumentRevisions-V100 \
-        .Spotlight-V100 \
-        .TemporaryItems \
-        .Trashes \
-        .fseventsd; do
-        if [ -e "$target/$service_dir" ]; then
-            run_cmd rm -rf "$target/$service_dir"
-        fi
-    done
-
-    ok "Volume cleanup complete: $target"
-}
-
-detect_usb_volumes() {
-    # Find mounted external/USB volumes (physical disks, not disk images or internal)
-    local vol
-    while IFS= read -r vol; do
-        [ -z "$vol" ] && continue
-        # Skip the boot volume and /Volumes itself
-        [ "$vol" = "/" ] && continue
-        # Check if already in TARGETS
-        local already=0
-        for t in "${TARGETS[@]}"; do
-            [ "$t" = "$vol" ] && already=1 && break
-        done
-        [ "$already" -eq 1 ] && continue
-        TARGETS+=("$vol")
-        log "Auto-detected USB/external volume: $vol"
-    done < <(
-        diskutil list -plist external physical 2>/dev/null \
-        | plutil -extract AllDisksAndPartitions json -o - - 2>/dev/null \
-        | python3 -c '
-import json, subprocess, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-for disk in data:
-    parts = disk.get("Partitions", [])
-    if not parts:
-        parts = [disk]
-    for p in parts:
-        dev = p.get("DeviceIdentifier", "")
-        if not dev:
-            continue
+    print(f"🚀 Cleaning volume: {target}")
+    patterns = {".ds_store", "._*"}
+    if os.name == "nt":
+        patterns.add("thumbs.db")
+    found = set()
+    for pattern in patterns:
+        for path in target.rglob(pattern):
+            if path.is_file() and not path.is_symlink():
+                found.add(path)
+    if sys.platform == "darwin":
+        dot_clean = shutil.which("dot_clean")
+        if dot_clean and run([dot_clean, "-m", str(target)], dry_run):
+            return False
+    failed = False
+    for path in sorted(found):
         try:
-            info = subprocess.check_output(
-                ["diskutil", "info", "-plist", dev],
-                text=True, stderr=subprocess.DEVNULL,
-            )
-            import plistlib
-            pinfo = plistlib.loads(info.encode())
-            mp = pinfo.get("MountPoint", "")
-            if mp and mp.startswith("/Volumes/"):
-                print(mp)
-        except Exception:
-            pass
-' 2>/dev/null
-    )
-}
+            remove(path, dry_run)
+        except OSError as error:
+            print(f"❌ Could not remove {path}: {error}", file=sys.stderr)
+            failed = True
+    if sys.platform == "darwin":
+        for name in MAC_VOLUME_DIRS:
+            path = target / name
+            if os.path.lexists(path):
+                try:
+                    remove(path, dry_run)
+                except OSError as error:
+                    print(f"❌ Could not remove {path}: {error}", file=sys.stderr)
+                    failed = True
+    print(f"{'⚠️ Volume cleanup had errors' if failed else '✅ Volume cleanup complete'}: {target}")
+    return not failed
 
-detect_usb_volumes
 
-for target in "${TARGETS[@]}"; do
-    clean_volume "$target"
-done
+def clean_system(dry_run: bool) -> bool:
+    home = Path.home()
+    failed = False
+    print("🚀 Starting user system maintenance...")
+    if sys.platform == "darwin":
+        defaults = shutil.which("defaults")
+        if defaults:
+            for key in ("DSDontWriteNetworkStores", "DSDontWriteUSBStores"):
+                failed |= run([defaults, "write", "com.apple.desktopservices", key,
+                               "-bool", "true"], dry_run) != 0
+        brew = shutil.which("brew")
+        if brew:
+            environment = os.environ.copy()
+            environment["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+            failed |= run([brew, "cleanup", "-s"], dry_run, env=environment) != 0
+        else:
+            print("⚠️ Homebrew not found, skipping.")
+        purge = shutil.which("purge")
+        sudo = shutil.which("sudo")
+        if purge and sudo:
+            failed |= run([sudo, purge], dry_run) != 0
+        adobe = home / "Library/Application Support/Adobe/Common"
+        cache_paths = [adobe / name for name in
+                       ("Media Cache", "Media Cache Files", "Peak Files", "PTX")]
+        cache_paths.append(home / "Library/Caches")
+        for directory in (home / "yuleshow-github", home / "Pictures"):
+            dot_clean = shutil.which("dot_clean")
+            if dot_clean and directory.is_dir():
+                failed |= run([dot_clean, "-m", str(directory)], dry_run) != 0
+    elif os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData/Local"))
+        cache_paths = [local / "Temp",
+                       home / "AppData/Roaming/Adobe/Common/Media Cache",
+                       home / "AppData/Roaming/Adobe/Common/Media Cache Files",
+                       home / "AppData/Roaming/Adobe/Common/Peak Files"]
+    else:
+        cache_paths = [home / ".cache"]
 
-if [ "$RUN_SYSTEM" -eq 1 ]; then
-    clean_system
-fi
+    for path in home.rglob(".DS_Store"):
+        if path.is_file() and not path.is_symlink():
+            try:
+                remove(path, dry_run)
+            except OSError as error:
+                print(f"❌ Could not remove {path}: {error}", file=sys.stderr)
+                failed = True
+    for cache in cache_paths:
+        if not cache.is_dir():
+            continue
+        children = list(cache.iterdir())
+        if sys.platform == "darwin" and cache.name == "Caches":
+            children = [child for child in children if child.name != "Homebrew"]
+        for child in children:
+            try:
+                remove(child, dry_run)
+            except OSError as error:
+                print(f"❌ Could not remove {child}: {error}", file=sys.stderr)
+                failed = True
+    print("⚠️ System maintenance had errors." if failed else "✅ System maintenance complete.")
+    return not failed
 
-ok "Maintenance complete! 梅璽閣主, your workspace is optimized."
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--system", action="store_true", help="clean user system caches")
+    parser.add_argument("--dry-run", action="store_true", help="report changes without applying")
+    parser.add_argument("volumes", nargs="*", type=Path, help="mounted volume roots to clean")
+    args = parser.parse_args()
+    if not args.system and not args.volumes:
+        args.system = True
+    succeeded = True
+    for target in args.volumes:
+        succeeded &= clean_volume(target, args.dry_run)
+    if args.system:
+        succeeded &= clean_system(args.dry_run)
+    return 0 if succeeded else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,103 +1,117 @@
-#!/usr/bin/env bash
-# yuleshow-digikam-backup: dump digiKam MySQL DB and prune old backups.
-# Usage: yuleshow-digikam-backup
-# Config: ~/.yuleshow/digikam.conf (overrides defaults). Keys:
-#   MYSQL_USER, MYSQL_PASS, DB_NAME, BACKUP_DIR, KEEP_DAYS
+#!/usr/bin/env python3
+"""Back up the digiKam MySQL database and prune expired archives."""
 
-set -euo pipefail
+import gzip
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 
-log()  { printf '🚀 %s\n' "$*"; }
-ok()   { printf '✅ %s\n' "$*"; }
-warn() { printf '⚠️  %s\n' "$*" >&2; }
-err()  { printf '❌ %s\n' "$*" >&2; }
 
-# Defaults (overridable by env or config file)
-MYSQL_USER="${MYSQL_USER:-digikamuser}"
-MYSQL_PASS="${MYSQL_PASS:-}"
-DB_NAME="${DB_NAME:-digikam}"
-BACKUP_DIR="${BACKUP_DIR:-$HOME/Backups/digikam}"
-KEEP_DAYS="${KEEP_DAYS:-14}"
+def load_config(path: Path) -> dict[str, str]:
+    values = {}
+    if not path.is_file():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        value = value.strip().strip("\"'")
+        value = value.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home()))
+        values[key.strip()] = value
+    return values
 
-CONF_FILE="$HOME/.yuleshow/digikam.conf"
-if [ -f "$CONF_FILE" ]; then
-    # shellcheck source=/dev/null
-    . "$CONF_FILE"
-fi
 
-command -v mysqldump >/dev/null 2>&1 || { err "mysqldump not found"; exit 1; }
+def find_mysqldump() -> Optional[str]:
+    executable = shutil.which("mysqldump")
+    if executable:
+        return executable
+    brew = shutil.which("brew")
+    if brew:
+        result = subprocess.run(
+            [brew, "--prefix", "mysql-client"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode == 0:
+            candidate = Path(result.stdout.strip()) / "bin" / "mysqldump"
+            if candidate.is_file():
+                return str(candidate)
+    return None
 
-if [ -z "$MYSQL_PASS" ]; then
-    warn "MYSQL_PASS is empty. Set it in $CONF_FILE or use ~/.my.cnf"
-fi
 
-TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
-FILENAME="${DB_NAME}_${TIMESTAMP}.sql.gz"
+def main() -> int:
+    config_path = Path.home() / ".yuleshow" / "digikam.conf"
+    config = load_config(config_path)
+    user = os.environ.get("MYSQL_USER", config.get("MYSQL_USER", "digikamuser"))
+    password = os.environ.get("MYSQL_PASS", config.get("MYSQL_PASS", ""))
+    database = os.environ.get("DB_NAME", config.get("DB_NAME", "digikam"))
+    backup_dir = Path(os.environ.get(
+        "BACKUP_DIR", config.get("BACKUP_DIR", str(Path.home() / "Backups" / "digikam"))))
+    try:
+        keep_days = int(os.environ.get("KEEP_DAYS", config.get("KEEP_DAYS", "14")))
+        if keep_days < 0:
+            raise ValueError
+    except ValueError:
+        print("KEEP_DAYS must be a non-negative integer.", file=sys.stderr)
+        return 1
+    mysqldump = find_mysqldump()
+    if not mysqldump:
+        print("mysqldump not found; install a MySQL or MariaDB client.", file=sys.stderr)
+        return 1
+    if not password:
+        print(f"⚠️ MYSQL_PASS is empty. Set it in {config_path} or use ~/.my.cnf",
+              file=sys.stderr)
 
-mkdir -p "$BACKUP_DIR"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{database}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql.gz"
+    destination = backup_dir / filename
+    temporary = None
+    environment = os.environ.copy()
+    if password:
+        environment["MYSQL_PWD"] = password
+    command = [mysqldump, "-u", user, "--databases", database]
+    try:
+        with tempfile.NamedTemporaryFile(dir=backup_dir, prefix=".digikam-", delete=False) as raw:
+            temporary = Path(raw.name)
+        print(f"🚀 Backing up database '{database}' -> {destination}")
+        with subprocess.Popen(command, stdout=subprocess.PIPE, env=environment) as process:
+            if process.stdout is None:
+                raise OSError("Could not read mysqldump output")
+            with process.stdout, temporary.open("wb") as raw, gzip.GzipFile(
+                    filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+                shutil.copyfileobj(process.stdout, compressed)
+            if process.wait():
+                raise subprocess.CalledProcessError(process.returncode, command)
+        temporary.replace(destination)
+        temporary = None
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"❌ Backup failed: {error}", file=sys.stderr)
+        return 1
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
-log "Backing up database '$DB_NAME' -> $BACKUP_DIR/$FILENAME"
-if mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASS" --databases "$DB_NAME" | gzip > "$BACKUP_DIR/$FILENAME"; then
-    ok "Backup succeeded: $FILENAME"
-else
-    err "Backup failed"
-    exit 1
-fi
+    print(f"✅ Backup succeeded: {filename}")
+    cutoff = datetime.now().timestamp() - timedelta(days=keep_days).total_seconds()
+    for backup in backup_dir.glob(f"{database}_*.sql.gz"):
+        try:
+            if backup.is_file() and backup.stat().st_mtime < cutoff:
+                backup.unlink()
+        except OSError as error:
+            print(f"❌ Could not prune {backup}: {error}", file=sys.stderr)
+            return 1
+    print(f"✅ Cleanup done; retained {keep_days} days.")
+    return 0
 
-log "Pruning backups older than $KEEP_DAYS days..."
-find "$BACKUP_DIR" -name "${DB_NAME}_*.sql.gz" -type f -mtime +"$KEEP_DAYS" -exec rm {} \;
-ok "Cleanup done."
-#!/bin/bash
 
-# ====== 配置檔 ======
-# 讀取 ~/.yuleshow/digikam.conf (若存在)，可覆蓋下列預設值。
-# 範例內容：
-#   MYSQL_USER=digikamuser
-#   MYSQL_PASS=dkpass123
-#   DB_NAME=digikam
-#   BACKUP_DIR=$HOME/Backups/digikam
-#   KEEP_DAYS=14
-CONF_FILE="$HOME/.yuleshow/digikam.conf"
-
-# 預設值
-MYSQL_USER="${MYSQL_USER:-digikamuser}"
-MYSQL_PASS="${MYSQL_PASS:-}"
-DB_NAME="${DB_NAME:-digikam}"
-BACKUP_DIR="${BACKUP_DIR:-$HOME/Backups/digikam}"
-KEEP_DAYS="${KEEP_DAYS:-14}"
-
-if [ -f "$CONF_FILE" ]; then
-    # shellcheck source=/dev/null
-    . "$CONF_FILE"
-fi
-
-if ! command -v mysqldump >/dev/null 2>&1; then
-    echo "❌ mysqldump not found. Install mysql/mariadb client first."
-    exit 1
-fi
-
-if [ -z "$MYSQL_PASS" ]; then
-    echo "⚠️  MYSQL_PASS 未設定。請建立 $CONF_FILE 或使用 ~/.my.cnf"
-fi
-# ========================
-
-TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
-FILENAME="${DB_NAME}_${TIMESTAMP}.sql.gz"
-
-mkdir -p "$BACKUP_DIR"
-
-# 執行備份
-mysqldump -u "$MYSQL_USER" -p"$MYSQL_PASS" --databases "$DB_NAME" | gzip > "${BACKUP_DIR}/${FILENAME}"
-
-# 檢查成功與否
-if [ $? -eq 0 ]; then
-    echo "✅ 備份成功：$FILENAME"
-else
-    echo "❌ 備份失敗！"
-    exit 1
-fi
-
-# 清理舊備份
-find "$BACKUP_DIR" -name "${DB_NAME}_*.sql.gz" -type f -mtime +$KEEP_DAYS -exec rm {} \;
-
-echo "🧹 清理 $KEEP_DAYS 天前的舊備份完成"
-     
+if __name__ == "__main__":
+    sys.exit(main())

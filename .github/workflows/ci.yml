@@ -1,0 +1,48 @@
+name: Cross-platform tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Unix tools
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          PREFIX="${RUNNER_TEMP}/yuleshow-test" ./install.sh --no-system --no-path
+          "${RUNNER_TEMP}/yuleshow-test/bin/yuleshow-clean" --help
+      - name: Install Windows tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP "yuleshow-test"
+          .\install.ps1 -NoSystem -NoPath -Prefix $prefix
+          $env:YULESHOW_DAILY_TOOLS_PYTHON = Join-Path $prefix "share\yuleshow-daily-tools\venv\Scripts\python.exe"
+          $env:YULESHOW_DAILY_TOOLS_SCRIPTS = Join-Path $PWD "scripts"
+          & (Join-Path $prefix "bin\yuleshow-clean.cmd") --help
+      - name: Install timezone data
+        run: python -m pip install tzdata
+      - name: GPX tests
+        run: python tests/test-fixgpx.py -v
+      - name: Cross-platform smoke tests
+        run: python tests/test_portability.py -v
+      - name: Validate Windows installer syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD "install.ps1"), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Out-String | Write-Error }

@@ -3,7 +3,7 @@
 
 Usage: yuleshow-rename-lunar-folder
 Scans CWD recursively. For each directory starting with 8 digits (YYYYMMDD),
-appends " | <weekday> <ganzhi>年 <lunar month/day> [festivals/solar terms/US holidays]".
+appends lunar/festival text, using a Windows-safe folder-name separator.
 """
 
 import os
@@ -132,12 +132,17 @@ def main() -> int:
             info = get_lunar_info(m.group(1))
             if not info:
                 continue
-            suffix = f" | {info}"
+            separator = " - " if os.name == "nt" else " | "
+            suffix = f"{separator}{info}"
             if suffix in dirname:
                 continue
             new_name = f"{dirname}{suffix}"
+            target = os.path.join(root, new_name)
+            if os.path.lexists(target):
+                err(f"{dirname}: destination exists: {new_name}")
+                continue
             try:
-                os.rename(os.path.join(root, dirname), os.path.join(root, new_name))
+                os.rename(os.path.join(root, dirname), target)
                 ok(f"{dirname} -> {new_name}")
             except Exception as e:
                 err(f"{dirname}: {e}")
