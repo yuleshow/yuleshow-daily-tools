@@ -55,6 +55,8 @@ class PortabilityTests(unittest.TestCase):
             self.assertTrue((folder / "flight.gpx").is_file())
             self.assertTrue((folder / ".hidden.gpx").is_file())
             self.assertEqual((folder / "existing.GPX").read_text(), "keep")
+            self.assertEqual(sum(path.name.casefold() == "existing.gpx"
+                                 for path in folder.iterdir()), 1)
             self.assertTrue((folder / "existing.igc").is_file())
 
     def test_igc_publisher_does_not_overwrite_on_windows_or_unix(self):

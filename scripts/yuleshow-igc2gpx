@@ -22,6 +22,11 @@ def publish_without_overwrite(source: Path, destination: Path) -> bool:
     return not os.path.lexists(source)
 
 
+def has_same_name_output(destination: Path) -> bool:
+    return any(path.name.casefold() == destination.name.casefold()
+               for path in destination.parent.iterdir())
+
+
 def main() -> int:
     if len(sys.argv) != 1:
         print("Usage: yuleshow-igc2gpx", file=sys.stderr)
@@ -40,7 +45,7 @@ def main() -> int:
     failed = False
     for source in inputs:
         destination = source.with_suffix(".gpx")
-        if os.path.lexists(destination):
+        if has_same_name_output(destination):
             print(f"⚠️ Skipping {source}: same-name GPX already exists")
             continue
         temporary = None

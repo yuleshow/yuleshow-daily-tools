@@ -90,7 +90,7 @@ install_system_macos() {
     fi
     log "Installing system packages via Homebrew"
     brew install --quiet \
-        python \
+        python@3.14 \
         ffmpeg \
         gpsbabel \
         exiftool \
@@ -99,6 +99,26 @@ install_system_macos() {
         libheif \
         imagemagick \
         mysql-client || warn "Some brew packages may already be installed."
+}
+
+select_python() {
+    local candidate brew_prefix
+    local candidates=(python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3)
+    if [ "$OS" = "macos" ] && command -v brew >/dev/null 2>&1; then
+        brew_prefix="$(brew --prefix python@3.14 2>/dev/null || true)"
+        if [ -x "$brew_prefix/bin/python3.14" ]; then
+            candidates=("$brew_prefix/bin/python3.14" "${candidates[@]}")
+        fi
+    fi
+    for candidate in "${candidates[@]}"; do
+        if command -v "$candidate" >/dev/null 2>&1 &&
+                "$candidate" -c 'import sys; sys.exit(0 if (3, 9) <= sys.version_info[:2] < (3, 15) else 1)' \
+                >/dev/null 2>&1; then
+            PYTHON="$(command -v "$candidate")"
+            return 0
+        fi
+    done
+    return 1
 }
 
 install_system_linux() {
@@ -156,7 +176,7 @@ setup_venv() {
     log "Creating Python virtualenv at $VENV_DIR"
     mkdir -p "$APP_DIR"
     if [ ! -x "$VENV_DIR/bin/python" ]; then
-        python3 -m venv "$VENV_DIR"
+        "$PYTHON" -m venv "$VENV_DIR"
     fi
     "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel setuptools
 
@@ -287,8 +307,7 @@ main() {
         log "Skipping system package installation (--no-system)"
     fi
 
-    python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' ||
-        die "Python 3.9 or newer is required."
+    select_python || die "Python 3.9 through 3.14 is required by the current dependencies."
 
     setup_venv
     install_wrappers

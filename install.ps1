@@ -53,21 +53,31 @@ if (-not (Test-Path $ScriptsDir)) {
     throw "Scripts directory not found: $ScriptsDir"
 }
 
-$PythonLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
-if ($PythonLauncher) {
-    $PythonCommand = $PythonLauncher.Source
-    $PythonArguments = @("-3")
-} else {
-    $Python = Get-Command "python.exe" -ErrorAction SilentlyContinue
-    if (-not $Python) {
-        throw "Python 3 was not found. Install Python 3.9+ and re-run this installer."
-    }
-    $PythonCommand = $Python.Source
-    $PythonArguments = @()
+$VersionCheck = "import sys; sys.exit(0 if (3, 9) <= sys.version_info[:2] < (3, 15) else 1)"
+$PythonCommand = $null
+$PythonArguments = @()
+$Python = Get-Command "python.exe" -ErrorAction SilentlyContinue
+if ($Python) {
+    & $Python.Source -c $VersionCheck
+    if ($LASTEXITCODE -eq 0) { $PythonCommand = $Python.Source }
 }
-$VersionCheck = "import sys; sys.exit(sys.version_info < (3, 9))"
-& $PythonCommand @PythonArguments -c $VersionCheck
-if ($LASTEXITCODE -ne 0) { throw "Python 3.9 or newer is required." }
+if (-not $PythonCommand) {
+    $PythonLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($PythonLauncher) {
+        foreach ($Version in @("3.14", "3.13", "3.12", "3.11", "3.10", "3.9")) {
+            $CandidateArguments = @("-$Version")
+            & $PythonLauncher.Source @CandidateArguments -c $VersionCheck
+            if ($LASTEXITCODE -eq 0) {
+                $PythonCommand = $PythonLauncher.Source
+                $PythonArguments = $CandidateArguments
+                break
+            }
+        }
+    }
+}
+if (-not $PythonCommand) {
+    throw "Python 3.9 through 3.14 is required by the current dependencies."
+}
 
 if (-not $NoSystem) {
     $Winget = Get-Command "winget.exe" -ErrorAction SilentlyContinue

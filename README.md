@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 The installer will:
 
 1. Install system dependencies (Homebrew on macOS; `apt` / `dnf` / `pacman` on Linux; `winget` on Windows when available).
-2. Create a Python virtualenv at `~/.local/share/yuleshow-daily-tools/venv` (Windows: `%USERPROFILE%\.local\share\yuleshow-daily-tools\venv`).
+2. Create a Python 3.9-3.14 virtualenv at `~/.local/share/yuleshow-daily-tools/venv` (Windows: `%USERPROFILE%\.local\share\yuleshow-daily-tools\venv`).
 3. Install Python libraries from `requirements.txt` (including Pillow, pyexiv2, lunarcalendar, pdf2image, exifread, and timezone data).
 4. Install command wrappers for every tool in `scripts/` (`~/.local/bin/` on macOS/Linux; `%USERPROFILE%\.local\bin\` on Windows).
 
